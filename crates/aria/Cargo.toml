@@ -1,0 +1,63 @@
+[package]
+edition = "2021"
+name = "aria"
+version = "0.1.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+ytpapi2.workspace = true
+
+#  --- Threading & Sync ---
+flume = "0.11.0"
+once_cell = "1.19.0"
+tokio = { version = "1.36.0", features = ["rt-multi-thread"] }
+
+#  --- Encoding ---
+bincode = { version = "1.3.3" }
+directories = "5.0.1"
+rand = "0.8.5"
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.114"
+urlencoding = "2.1.3"
+varuint = "0.7.1"
+
+#  --- UI ---
+crossterm = "0.27.0"
+ratatui = { version = "0.26.1", features = ["serde"] }
+unicode-bidi = "0.3"
+
+#  --- Player ---
+player.workspace = true
+
+#  --- Media Control ---
+souvlaki = "0.7.3"
+
+#  --- Alloc ---
+mimalloc = { version = "0.1.39", default-features = false }
+
+#  --- Config ---
+toml = "0.8.11"
+
+#  --- Logging ---
+log = "0.4.21"
+
+#  --- Database ---
+database.workspace = true
+download-manager.workspace = true
+common-structs.workspace = true
+
+# -- Cookies auto retreival --
+rookie = "0.5.2"
+
+ctrlc = "3.5.0"
+
+[features]
+rusty-ytdl-backend = ["download-manager/rusty-ytdl-backend"]
+
+[target."cfg(target_os = \"windows\")".dependencies]
+raw-window-handle = "0.4.3"
+winit = "0.26.1"
+wry = "0.57.1"
+tao = "0.37.2"

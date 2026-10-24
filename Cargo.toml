@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = ["crates/common-structs","crates/database", "crates/download-manager","crates/player", "crates/aria", "crates/ytpapi2"]
+
+[workspace.dependencies]
+player = { path = "crates/player" }
+ytpapi2 = { path = "crates/ytpapi2" }
+database = { path = "crates/database" }
+download-manager = { path = "crates/download-manager" }
+common-structs = { path = "crates/common-structs" }
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

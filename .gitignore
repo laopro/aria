@@ -1,0 +1,11 @@
+/target
+/data
+*.exe
+*.pdb
+headers.txt
+account_id.txt
+*.log
+*.err
+*.out
+last-playlist.json
+.DS_Store
