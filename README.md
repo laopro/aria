@@ -35,6 +35,30 @@ only if you want your own library and playlists.
 
 ## Install
 
+One command, no Rust required:
+
+**Linux** (installs to `~/.local/bin`, adds it to your PATH):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/laopro/aria/main/install.sh | sh
+```
+
+**Windows** (PowerShell; installs to `%LOCALAPPDATA%\Aria`, adds it to your PATH):
+
+```powershell
+irm https://raw.githubusercontent.com/laopro/aria/main/install.ps1 | iex
+```
+
+Then open a new terminal and run `aria`.
+
+Other options:
+
+- Download the prebuilt binary from
+  [releases](https://github.com/laopro/aria/releases): `aria-linux-x86_64.AppImage`,
+  `aria-linux-x86_64.tar.gz`, `aria-windows-x86_64.exe` or the portable Windows zip.
+- macOS: build from source (below).
+- From source on any platform:
+
 ```bash
 cargo install --path crates/aria --locked
 ```
@@ -46,7 +70,6 @@ cargo build --release
 # target/release/aria (aria.exe on Windows)
 ```
 
-Prebuilt binaries are attached to GitHub releases.
 
 ## Usage
 
