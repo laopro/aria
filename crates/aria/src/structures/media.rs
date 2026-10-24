@@ -215,6 +215,7 @@ pub fn run_window_handler(updater: &Sender<ManagerMessage>) -> Option<()> {
             *ctrl_flow = winit::event_loop::ControlFlow::Wait;
         }
     });
+    Some(())
 }
 
 #[cfg(target_os = "windows")]
