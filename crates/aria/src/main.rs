@@ -65,6 +65,11 @@ pub fn try_get_cookies() -> Option<String> {
 }
 
 fn main() {
+    // Remove the previous binary left behind by `aria --update`.
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = std::fs::remove_file(exe.with_extension("old"));
+    }
+
     // Check if the first param is --files
     if let Some(arg) = std::env::args().nth(1) {
         match arg.as_str() {
@@ -97,6 +102,10 @@ fn main() {
                         println!("[ERROR] Can't clear cache: {e}");
                     }
                 }
+                return;
+            }
+            "--update" => {
+                update();
                 return;
             }
             "--with-auto-cookies" => {
@@ -471,6 +480,128 @@ pub async fn api_instance() -> Option<std::sync::Arc<ytpapi2::YoutubeMusicInstan
         .await
         .ok()
         .map(Arc::new)
+}
+
+/// Downloads the latest release binary and replaces the running executable.
+fn update() {
+    const REPO: &str = "laopro/aria";
+    const CURRENT: &str = env!("CARGO_PKG_VERSION");
+
+    let asset_name = if cfg!(windows) {
+        "aria-windows-x86_64.exe"
+    } else if cfg!(target_os = "linux") {
+        "aria-linux-x86_64"
+    } else {
+        println!("Self-update is only available on Windows and Linux.");
+        println!("Download the latest build from https://github.com/{REPO}/releases");
+        return;
+    };
+
+    println!("Checking the latest release...");
+    let release = match ureq::get(&format!(
+        "https://api.github.com/repos/{REPO}/releases/latest"
+    ))
+    .set("User-Agent", DEFAULT_USER_AGENT)
+    .call()
+    {
+        Ok(response) => match response.into_string() {
+            Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
+                Ok(json) => json,
+                Err(e) => {
+                    println!("[ERROR] Could not read the release info: {e}");
+                    return;
+                }
+            },
+            Err(e) => {
+                println!("[ERROR] Could not read the release info: {e}");
+                return;
+            }
+        },
+        Err(e) => {
+            println!("[ERROR] Could not reach GitHub: {e}");
+            return;
+        }
+    };
+
+    let latest = release["tag_name"]
+        .as_str()
+        .unwrap_or_default()
+        .trim_start_matches('v')
+        .to_string();
+    let url = release["assets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|asset| asset["name"].as_str() == Some(asset_name))
+        .and_then(|asset| asset["browser_download_url"].as_str())
+        .map(str::to_string);
+
+    let Some(url) = url else {
+        println!("[ERROR] The latest release has no {asset_name} asset");
+        return;
+    };
+
+    if latest == CURRENT {
+        println!("Aria {CURRENT} is already up to date.");
+        return;
+    }
+
+    let exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(e) => {
+            println!("[ERROR] Could not locate the running executable: {e}");
+            return;
+        }
+    };
+    let tmp = exe.with_extension("download");
+
+    println!("Downloading Aria {latest}...");
+    let response = match ureq::get(&url)
+        .set("User-Agent", DEFAULT_USER_AGENT)
+        .call()
+    {
+        Ok(response) => response,
+        Err(e) => {
+            println!("[ERROR] Download failed: {e}");
+            return;
+        }
+    };
+    let mut file = match std::fs::File::create(&tmp) {
+        Ok(file) => file,
+        Err(e) => {
+            println!("[ERROR] Could not write next to the executable: {e}");
+            return;
+        }
+    };
+    if let Err(e) = std::io::copy(&mut response.into_reader(), &mut file) {
+        println!("[ERROR] Download failed: {e}");
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    drop(file);
+
+    // A running executable cannot be overwritten on Windows, but it can be
+    // renamed. The leftover is deleted on the next start.
+    let backup = exe.with_extension("old");
+    let _ = std::fs::remove_file(&backup);
+    if let Err(e) = std::fs::rename(&exe, &backup) {
+        println!("[ERROR] Could not replace {}: {e}", exe.display());
+        println!("Re-run the installer, or move Aria to a folder you own.");
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, &exe) {
+        println!("[ERROR] Could not install the new binary: {e}");
+        let _ = std::fs::rename(&backup, &exe);
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755));
+    }
+
+    println!("Updated to Aria {latest}. Restart Aria to use it.");
 }
 
 async fn app_start_main(updater_r: Receiver<ManagerMessage>, updater_s: Sender<ManagerMessage>) {

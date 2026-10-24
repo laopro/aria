@@ -28,6 +28,7 @@ Options:
         --files             Show the location of the Aria files
         --fix-db            Fix the local database
         --clear-cache       Erase all the files in cache
+        --update            Update Aria to the latest release (Windows/Linux)
 
 Shortcuts:
         Use your mouse to click in lists if your terminal has mouse support

@@ -1,7 +1,7 @@
 [package]
 edition = "2021"
 name = "aria"
-version = "0.1.0"
+version = "0.2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -52,6 +52,9 @@ common-structs.workspace = true
 rookie = "0.5.2"
 
 ctrlc = "3.5.0"
+
+#  --- Self update ---
+ureq = { version = "2.10", default-features = false, features = ["tls", "gzip"] }
 
 [features]
 rusty-ytdl-backend = ["download-manager/rusty-ytdl-backend"]
