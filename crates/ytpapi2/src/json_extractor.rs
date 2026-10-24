@@ -299,3 +299,58 @@ fn is_duration(text: &str) -> bool {
             .split(':')
             .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
 }
+
+/// Extracts the tracks of a YouTube Music radio (autoplay) queue.
+pub(crate) fn parse_radio(value: &Value) -> Vec<YoutubeMusicVideoRef> {
+    let mut out = Vec::new();
+    collect_radio(value, &mut out);
+    out
+}
+
+fn collect_radio(value: &Value, out: &mut Vec<YoutubeMusicVideoRef>) {
+    match value {
+        Value::Array(items) => items.iter().for_each(|item| collect_radio(item, out)),
+        Value::Object(map) => {
+            if let Some(renderer) = map.get("playlistPanelVideoRenderer") {
+                if let Some(video) = radio_video(renderer) {
+                    if !out.iter().any(|v| v.video_id == video.video_id) {
+                        out.push(video);
+                    }
+                }
+            }
+            map.values().for_each(|item| collect_radio(item, out));
+        }
+        _ => {}
+    }
+}
+
+fn radio_video(value: &Value) -> Option<YoutubeMusicVideoRef> {
+    let video_id = value.get("videoId")?.as_str()?.to_string();
+    let title = value
+        .get("title")
+        .and_then(|text| get_text(text, false, false))
+        .unwrap_or_default();
+    let author = value
+        .get("longBylineText")
+        .or_else(|| value.get("shortBylineText"))
+        .and_then(|text| get_text(text, false, false))
+        .unwrap_or_default();
+    // Radio bylines look like "Artist • 1.8B views • 19M likes".
+    let author = author
+        .split('•')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let duration = value
+        .get("lengthText")
+        .and_then(|text| get_text(text, false, false))
+        .unwrap_or_default();
+    Some(YoutubeMusicVideoRef {
+        title,
+        author,
+        album: String::new(),
+        video_id,
+        duration,
+    })
+}

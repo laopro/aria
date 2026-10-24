@@ -58,7 +58,7 @@ impl PlaylistView {
         self.sender
             .send(SoundAction::ReplaceQueue(self.videos.clone()))
             .unwrap();
-        EventResponse::Message(vec![ManagerMessage::PlayerFrom(Screens::Playlist)])
+        EventResponse::None
     }
 }
 
@@ -78,7 +78,7 @@ impl Screen for PlaylistView {
                     self.videos.iter().skip(v).cloned().collect(),
                 ))
                 .unwrap();
-            EventResponse::Message(vec![ManagerMessage::PlayerFrom(Screens::Playlist)])
+            EventResponse::None
         } else {
             EventResponse::None
         }
@@ -91,7 +91,7 @@ impl Screen for PlaylistView {
                     self.videos.iter().skip(*v).cloned().collect(),
                 ))
                 .unwrap();
-            return EventResponse::Message(vec![ManagerMessage::PlayerFrom(Screens::Playlist)]);
+            return EventResponse::None;
         }
         match key.code {
             KeyCode::Esc => ManagerMessage::ChangeState(self.goto).event(),
@@ -110,7 +110,7 @@ impl Screen for PlaylistView {
                     Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("│", Style::default().fg(TEXT_DIM)),
-                Span::styled(" ← Volver ", Style::default().fg(TEXT_DIM)),
+                Span::styled(" ← Back ", Style::default().fg(TEXT_DIM)),
             ])),
             actions,
         );

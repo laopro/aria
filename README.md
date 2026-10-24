@@ -16,6 +16,8 @@ only if you want your own library and playlists.
 - **Mouse-first UI:** click the sidebar, lists, player buttons, progress bar and
   volume bar. Drag the progress line to seek.
 - **Import any playlist** by pasting a YouTube Music link in the Home screen.
+- **Autoplay radio:** when the queue reaches its last track, similar songs are
+  fetched and appended automatically, so the music never stops.
 - **Streams into RAM** (`yt-dlp` resolves the URL, audio is decoded in memory),
   so nothing is written to disk while listening.
 - **Small footprint:** a single native binary, ~20-40 MB of RAM while playing.

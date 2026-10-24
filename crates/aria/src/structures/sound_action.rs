@@ -30,6 +30,7 @@ pub enum SoundAction {
     Next(usize),
     AddVideosToQueue(Vec<YoutubeMusicVideoRef>),
     AddVideoUnary(YoutubeMusicVideoRef),
+    PlayNow(YoutubeMusicVideoRef),
     DeleteVideoUnary,
     ReplaceQueue(Vec<YoutubeMusicVideoRef>),
     VideoStatusUpdate(String, MusicDownloadStatus),
@@ -79,6 +80,9 @@ impl SoundAction {
             Self::AddVideosToQueue(video) => {
                 let db = DATABASE.read().unwrap();
                 for v in video {
+                    if player.list.iter().any(|x| x.video_id == v.video_id) {
+                        continue;
+                    }
                     Self::insert(
                         player,
                         v.video_id.clone(),
@@ -164,6 +168,11 @@ impl SoundAction {
                     Ok(_) => trace!("Deleted MP4 file"),
                     Err(e) => error!("Error deleting MP4 video file: {}", e),
                 }
+            }
+            Self::PlayNow(video) => {
+                Self::Cleanup.apply_sound_action(player);
+                Self::AddVideoUnary(video).apply_sound_action(player);
+                Self::Next(0).apply_sound_action(player);
             }
             Self::ReplaceQueue(videos) => {
                 // Start a fresh queue from the first item.

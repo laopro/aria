@@ -6,7 +6,7 @@ use std::{
 
 use json_extractor::{
     extract_playlist_info, from_json, get_continuation, get_playlist, get_playlist_search,
-    get_video, get_video_from_album, Continuation,
+    get_video, get_video_from_album, parse_radio, Continuation,
 };
 use log::{debug, error, trace};
 pub use reqwest::header::HeaderMap;
@@ -526,6 +526,34 @@ impl YoutubeMusicInstance {
             .unwrap_or_default();
         let videos = self.get_playlist_raw(playlist_id, n_continuations).await?;
         Ok((name, videos))
+    }
+
+    /// Fetches the autoplay radio for a video (similar songs to play next).
+    pub async fn get_radio(&self, video_id: &str) -> Result<Vec<YoutubeMusicVideoRef>> {
+        let url = format!(
+            "https://music.youtube.com/youtubei/v1/next?key={}&prettyPrint=false",
+            self.innertube_api_key
+        );
+        let body = match &self.account_id {
+            Some(id) => format!(
+                r#"{{"context":{{"client":{{"clientName":"WEB_REMIX","clientVersion":"{}"}},"user":{{"onBehalfOfUser":"{id}"}}}},"videoId":"{video_id}","playlistId":"RDAMVM{video_id}"}}"#,
+                self.client_version
+            ),
+            None => format!(
+                r#"{{"context":{{"client":{{"clientName":"WEB_REMIX","clientVersion":"{}"}}}},"videoId":"{video_id}","playlistId":"RDAMVM{video_id}"}}"#,
+                self.client_version
+            ),
+        };
+        let response = self
+            .post(&url, body)
+            .send()
+            .await
+            .map_err(YoutubeMusicError::RequestError)?
+            .text()
+            .await
+            .map_err(YoutubeMusicError::RequestError)?;
+        let json: Value = serde_json::from_str(&response).map_err(YoutubeMusicError::SerdeJson)?;
+        Ok(parse_radio(&json))
     }
 
     pub async fn search(

@@ -62,7 +62,7 @@ pub enum ManagerMessage {
     Inspect(String, Screens, Vec<YoutubeMusicVideoRef>),
     ChangeState(Screens),
     SearchFrom(Screens),
-    PlayerFrom(Screens),
+    Autoplay(String),
     #[allow(dead_code)]
     PlaylistFrom(Screens),
     RestartPlayer,
@@ -235,10 +235,24 @@ impl Manager {
                 self.search.goto = e;
                 self.set_current_screen(Screens::Search);
             }
-            ManagerMessage::PlayerFrom(e) => {
-                self.current_screen().close(Screens::MusicPlayer);
-                self.music_player.goto = e;
-                self.set_current_screen(Screens::MusicPlayer);
+            ManagerMessage::Autoplay(video_id) => {
+                let sender = self.music_player.soundaction_sender.clone();
+                crate::run_service(async move {
+                    let Some(api) = crate::api_instance().await else {
+                        return;
+                    };
+                    match api.get_radio(&video_id).await {
+                        Ok(videos) if !videos.is_empty() => {
+                            let videos = videos
+                                .into_iter()
+                                .filter(|v| v.video_id != video_id)
+                                .collect();
+                            let _ = sender.send(SoundAction::AddVideosToQueue(videos));
+                        }
+                        Ok(_) => log::info!("autoplay: radio returned no tracks"),
+                        Err(e) => log::error!("autoplay error: {e:?}"),
+                    }
+                });
             }
             ManagerMessage::PlaylistFrom(e) => {
                 self.current_screen().close(Screens::Playlist);

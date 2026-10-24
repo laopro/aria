@@ -227,22 +227,18 @@ impl Search {
         }
     }
 
-    pub fn execute_status(&self, e: Status, modifiers: KeyModifiers) -> EventResponse {
+    pub fn execute_status(&self, e: Status, _modifiers: KeyModifiers) -> EventResponse {
         match e {
             Status::Local(e) | Status::Unknown(e) => {
                 self.action_sender
-                    .send(SoundAction::AddVideoUnary(e.clone()))
+                    .send(SoundAction::PlayNow(e.clone()))
                     .unwrap();
                 DOWNLOAD_MANAGER.start_task_unary(
                     download_manager_handler(self.action_sender.clone()),
                     e,
                     ShutdownSignal,
                 );
-                if modifiers.contains(KeyModifiers::CONTROL) {
-                    EventResponse::None
-                } else {
-                    ManagerMessage::PlayerFrom(Screens::Playlist).event()
-                }
+                EventResponse::None
             }
             Status::PlayList(e, v) => ManagerMessage::Inspect(e.name, Screens::Search, v)
                 .pass_to(Screens::PlaylistViewer)

@@ -36,6 +36,7 @@ pub struct PlayerState {
     stream_tx: Sender<(String, Result<Vec<u8>, String>)>,
     stream_rx: Receiver<(String, Result<Vec<u8>, String>)>,
     pending_stream: Option<String>,
+    autoplay_requested: Option<String>,
 }
 
 /// How many upcoming tracks to pre-download to disk.
@@ -81,6 +82,7 @@ impl PlayerState {
             stream_tx,
             stream_rx,
             pending_stream: None,
+            autoplay_requested: None,
         }
     }
 
@@ -141,6 +143,23 @@ impl PlayerState {
             .unwrap_or(false)
     }
 
+    /// Requests an autoplay radio once the queue reaches its last track.
+    fn maybe_request_autoplay(&mut self) {
+        let Some(current) = self.current().cloned() else {
+            return;
+        };
+        if self.current + 1 < self.list.len() {
+            return;
+        }
+        if self.autoplay_requested.as_deref() == Some(current.video_id.as_str()) {
+            return;
+        }
+        self.autoplay_requested = Some(current.video_id.clone());
+        let _ = self
+            .updater
+            .try_send(ManagerMessage::Autoplay(current.video_id));
+    }
+
     pub fn update(&mut self) {
         PLAYER_RUNNING.store(self.current().is_some(), Ordering::SeqCst);
         self.update_controls();
@@ -152,6 +171,7 @@ impl PlayerState {
         while let Ok(e) = self.soundaction_receiver.try_recv() {
             e.apply_sound_action(self);
         }
+        self.maybe_request_autoplay();
         if self.is_current_download_failed() {
             SoundAction::Next(1).apply_sound_action(self);
         }
