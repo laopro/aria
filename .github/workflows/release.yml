@@ -38,14 +38,64 @@ jobs:
       - name: Build
         run: cargo build --release --locked
 
-      - name: Package
+      - name: Package Linux binary
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           mkdir -p dist
-          cp "target/release/${{ matrix.binary }}" "dist/${{ matrix.artifact }}"
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            tar -czf dist/aria-linux-x86_64.tar.gz -C dist aria-linux-x86_64
-          fi
+          cp target/release/aria dist/aria-linux-x86_64
+          tar -czf dist/aria-linux-x86_64.tar.gz -C dist aria-linux-x86_64
+
+      - name: Build AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          cp target/release/aria AppDir/usr/bin/aria
+          cat > AppDir/aria.desktop <<'EOF'
+          [Desktop Entry]
+          Name=Aria
+          Comment=Lightweight YouTube Music player for the terminal
+          Exec=aria
+          Icon=aria
+          Type=Application
+          Categories=AudioVideo;Audio;Player;ConsoleOnly;
+          Terminal=true
+          EOF
+          cp AppDir/aria.desktop AppDir/usr/share/applications/aria.desktop
+          cp docs/screenshot.png AppDir/aria.png
+          cp docs/screenshot.png AppDir/usr/share/icons/hicolor/256x256/apps/aria.png
+          cat > AppDir/AppRun <<'EOF'
+          #!/bin/sh
+          exec "$APPDIR/usr/bin/aria" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+          curl -sSL -o appimagetool \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir dist/aria-linux-x86_64.AppImage
+
+      - name: Package Windows portable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target\release\aria.exe dist\aria-windows-x86_64.exe
+          New-Item -ItemType Directory -Force portable | Out-Null
+          Copy-Item target\release\aria.exe portable\aria.exe
+          @"
+          Aria - portable build
+          =====================
+
+          1. Put aria.exe anywhere you like.
+          2. Install yt-dlp (https://github.com/yt-dlp/yt-dlp) and add it to PATH.
+          3. Run aria.exe from Windows Terminal.
+
+          Config, cache and logs live in %APPDATA%\laopro\aria and
+          %LOCALAPPDATA%\laopro\aria. Delete them to reset the app.
+          "@ | Set-Content portable\README.txt
+          Compress-Archive -Path portable\* -DestinationPath dist\aria-windows-x86_64-portable.zip -Force
 
       - uses: actions/upload-artifact@v4
         with:

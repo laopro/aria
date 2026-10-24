@@ -169,6 +169,10 @@ impl Chooser {
         });
     }
 
+    pub fn set_status(&mut self, status: String) {
+        self.status = status;
+    }
+
     fn add_element(&mut self, element: (String, Vec<YoutubeMusicVideoRef>)) {
         let entry = PlayListEntry::new(element.0, element.1);
         self.item_list

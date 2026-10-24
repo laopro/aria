@@ -38,7 +38,7 @@ pub fn spawn_api_task(updater_s: Sender<ManagerMessage>) {
                 let api_ = api.clone();
                 let updater_s_ = updater_s.clone();
                 set.spawn(async move {
-                    let search_results = api_.get_home(2).await;
+                    let search_results = api_.get_home(1).await;
                     match search_results {
                         Ok(e) => {
                             for playlist in e.playlists {
@@ -57,8 +57,14 @@ pub fn spawn_api_task(updater_s: Sender<ManagerMessage>) {
                 let api_ = api.clone();
                 let updater_s_ = updater_s.clone();
                 set.spawn(async move {
-                    let search_results = api_.get_library(&Endpoint::MusicLikedPlaylists, 2).await;
+                    let search_results = api_.get_library(&Endpoint::MusicLikedPlaylists, 1).await;
                     match search_results {
+                        Ok(e) if e.is_empty() => {
+                            let _ = updater_s_.send(ManagerMessage::Status(
+                                " Session expired: run `aria --login` to load your playlists"
+                                    .to_owned(),
+                            ));
+                        }
                         Ok(e) => {
                             for playlist in e {
                                 spawn_browse_playlist_task(
@@ -76,7 +82,7 @@ pub fn spawn_api_task(updater_s: Sender<ManagerMessage>) {
                 let api_ = api.clone();
                 let updater_s_ = updater_s.clone();
                 set.spawn(async move {
-                    let search_results = api_.get_library(&Endpoint::MusicLibraryLanding, 2).await;
+                    let search_results = api_.get_library(&Endpoint::MusicLibraryLanding, 1).await;
                     match search_results {
                         Ok(e) => {
                             for playlist in e {

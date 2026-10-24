@@ -41,7 +41,7 @@ pub struct PlayerState {
 
 /// How many upcoming tracks to pre-download to disk.
 /// `0` disables disk caching: every track is fetched into RAM on demand.
-const PREFETCH_AHEAD: usize = 0;
+const PREFETCH_AHEAD: usize = 1;
 
 impl PlayerState {
     fn new(

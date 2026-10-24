@@ -63,6 +63,7 @@ pub enum ManagerMessage {
     ChangeState(Screens),
     SearchFrom(Screens),
     Autoplay(String),
+    Status(String),
     #[allow(dead_code)]
     PlaylistFrom(Screens),
     RestartPlayer,
@@ -167,6 +168,7 @@ pub struct Manager {
     device_lost: DeviceLost,
     current_screen: Screens,
     playlist_viewer: PlaylistView,
+    mouse_pos: Option<(u16, u16)>,
 }
 
 impl Manager {
@@ -183,6 +185,7 @@ impl Manager {
             search: Search::new(action_sender).await,
             current_screen: Screens::Playlist,
             device_lost: DeviceLost(Vec::new(), None),
+            mouse_pos: None,
         }
     }
     pub fn current_screen(&mut self) -> &mut dyn Screen {
@@ -235,6 +238,7 @@ impl Manager {
                 self.search.goto = e;
                 self.set_current_screen(Screens::Search);
             }
+            ManagerMessage::Status(text) => self.chooser.set_status(text),
             ManagerMessage::Autoplay(video_id) => {
                 let sender = self.music_player.soundaction_sender.clone();
                 crate::run_service(async move {
@@ -280,9 +284,15 @@ impl Manager {
         let now_playing = self.music_player.now_playing();
 
         Self::draw_top_bar(f, top, self.current_screen);
-        Self::draw_sidebar(f, side, self.current_screen);
+        Self::draw_sidebar(f, side, self.current_screen, self.mouse_pos);
         self.current_screen().render(f, content);
-        Self::draw_player_bar(f, bottom, now_playing, self.music_player.sink.volume() as f32);
+        Self::draw_player_bar(
+            f,
+            bottom,
+            now_playing,
+            self.music_player.sink.volume() as f32,
+            self.mouse_pos,
+        );
     }
 
     fn draw_top_bar(f: &mut Frame, area: Rect, screen: Screens) {
@@ -325,16 +335,22 @@ impl Manager {
         );
     }
 
-    fn draw_sidebar(f: &mut Frame, area: Rect, screen: Screens) {
+    fn draw_sidebar(f: &mut Frame, area: Rect, screen: Screens, hover: Option<(u16, u16)>) {
         let inner_width = area.width.saturating_sub(2) as usize;
         let mut lines = vec![Line::from("")];
-        for (target, label) in SIDEBAR_SECTIONS {
+        for (index, (target, label)) in SIDEBAR_SECTIONS.iter().enumerate() {
+            let target = *target;
             let active = target == screen;
+            let hovered = hover
+                .map(|(_, y)| y == area.y.saturating_add(1 + index as u16))
+                .unwrap_or(false);
             let text_style = if active {
                 Style::default()
                     .fg(TEXT)
                     .bg(ACCENT_BG)
                     .add_modifier(Modifier::BOLD)
+            } else if hovered {
+                Style::default().fg(TEXT).bg(Color::Indexed(236))
             } else {
                 Style::default().fg(TEXT_DIM)
             };
@@ -349,7 +365,13 @@ impl Manager {
         f.render_widget(Paragraph::new(lines).style(Style::default().bg(BG)), area);
     }
 
-    fn draw_player_bar(f: &mut Frame, area: Rect, now: Option<NowPlaying>, volume: f32) {
+    fn draw_player_bar(
+        f: &mut Frame,
+        area: Rect,
+        now: Option<NowPlaying>,
+        volume: f32,
+        hover: Option<(u16, u16)>,
+    ) {
         let rows = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
@@ -378,13 +400,21 @@ impl Manager {
             "||"
         };
 
+        let transport_hover = hover
+            .map(|(x, y)| y == rows[1].y && x < 12)
+            .unwrap_or(false);
+        let arrow_style = if transport_hover {
+            Style::default().fg(TEXT)
+        } else {
+            Style::default().fg(TEXT_DIM)
+        };
         let mut title_spans = vec![
-            Span::styled(" |< ", Style::default().fg(TEXT_DIM)),
+            Span::styled(" |< ", arrow_style),
             Span::styled(
                 format!(" {play_icon} "),
                 Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" >| ", Style::default().fg(TEXT_DIM)),
+            Span::styled(" >| ", arrow_style),
             Span::styled("│ ", Style::default().fg(BORDER)),
             Span::styled(
                 title,
@@ -503,7 +533,7 @@ impl Manager {
             MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
                 match row {
                     // Transport buttons: previous, play/pause, next.
-                    1 if x < 9 => match x / 3 {
+                    1 if x < 12 => match x / 4 {
                         0 => {
                             let _ = self
                                 .music_player
@@ -518,6 +548,8 @@ impl Manager {
                                 .send(SoundAction::Next(1));
                         }
                     },
+                    // Clicking the title also toggles playback.
+                    1 => self.music_player.sink.toggle_playback(),
                     // Progress line: seek (also while dragging).
                     2 => {
                         let ratio = (x as f64 / bar.width.max(1) as f64).clamp(0.0, 1.0);
@@ -585,6 +617,7 @@ impl Manager {
                         }
                     }
                     Event::Mouse(mouse) => {
+                        self.mouse_pos = Some((mouse.column, mouse.row));
                         let is_down =
                             matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left));
                         let is_drag =
