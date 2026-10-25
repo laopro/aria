@@ -71,6 +71,14 @@ cargo build --release
 ```
 
 
+## Update
+
+```bash
+aria --update
+```
+
+Downloads the latest release and replaces the installed binary (Windows and Linux).
+
 ## Usage
 
 ```bash
