@@ -96,6 +96,16 @@ pub fn get_continuation(value: &Value) -> Option<Continuation> {
     })
 }
 
+/// Token of the "load more" row that ends a page of a long list (current
+/// YouTube Music format; `get_continuation` reads the older one).
+pub fn get_continuation_token(value: &Value) -> Option<String> {
+    value
+        .get("continuationItemRenderer")?
+        .pointer("/continuationEndpoint/continuationCommand/token")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
 pub fn get_playlist_search(value: &Value) -> Option<YoutubeMusicPlaylistRef> {
     let browse_id = &value
         .get("navigationEndpoint")

@@ -1,7 +1,7 @@
 mod stream;
 mod task;
 
-pub use stream::stream_bytes;
+pub use stream::{prewarm, stream_bytes};
 
 use std::{
     collections::{HashSet, VecDeque},

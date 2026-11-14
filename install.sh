@@ -44,8 +44,21 @@ case ":$PATH:" in
     ;;
 esac
 
-if ! command -v yt-dlp >/dev/null 2>&1; then
-    say "Heads up: install yt-dlp (https://github.com/yt-dlp/yt-dlp) so Aria can play music."
+# Aria plays through yt-dlp: fetch it too when it is missing.
+if ! command -v yt-dlp >/dev/null 2>&1 && [ ! -x "$PREFIX/yt-dlp" ]; then
+    say "Fetching yt-dlp (needed to play music)..."
+    # The plain script starts faster but needs Python; the standalone build does not.
+    if command -v python3 >/dev/null 2>&1; then
+        YTDLP_ASSET="yt-dlp"
+    else
+        YTDLP_ASSET="yt-dlp_linux"
+    fi
+    if curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/$YTDLP_ASSET" -o "$TMP/yt-dlp"; then
+        install -m 755 "$TMP/yt-dlp" "$PREFIX/yt-dlp"
+        say "Installed $PREFIX/yt-dlp"
+    else
+        say "Could not download yt-dlp. Install it from https://github.com/yt-dlp/yt-dlp so Aria can play music."
+    fi
 fi
 
 say "Done. Run: aria"

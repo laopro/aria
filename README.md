@@ -12,7 +12,11 @@ only if you want your own library and playlists.
 
 - **Works without a Google account.** Anonymous search, playback and playlist
   import out of the box.
-- **Optional sign-in** to load your YouTube Music library and playlists.
+- **Optional sign-in** from inside the app (`F8` or the sidebar button): it
+  reuses the YouTube Music session of your browser and loads your library,
+  playlists, Liked Music and history.
+- **Search tabs:** All (best matches first), Songs, Videos and Playlists.
+- **Queue panel** on the right (`F6` or the Queue button).
 - **Mouse-first UI:** click the sidebar, lists, player buttons, progress bar and
   volume bar. Drag the progress line to seek.
 - **Import any playlist** by pasting a YouTube Music link in the Home screen.
@@ -29,27 +33,23 @@ only if you want your own library and playlists.
 - A terminal with mouse support (Windows Terminal, conhost, GNOME Terminal,
   iTerm2, kitty, alacritty...).
 - To build: Rust 1.75+ and a C toolchain.
-  - Linux: `libasound2-dev`, `libdbus-1-dev`, `pkg-config`.
+  - Linux: `libasound2-dev`, `libdbus-1-dev`, `pkg-config` (Debian/Ubuntu), or
+    `alsa-lib-devel`, `dbus-devel`, `pkgconf-pkg-config` (Fedora).
   - macOS: Xcode command line tools.
   - Windows: MSVC build tools (WebView2 is used for the optional login window).
 
 ## Install
 
-One command, no Rust required:
-
-**Linux** (installs to `~/.local/bin`, adds it to your PATH):
+**Linux** (x86_64): one command, no Rust required. It installs Aria to
+`~/.local/bin`, adds it to your PATH and fetches `yt-dlp` if you do not have it:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/laopro/aria/main/install.sh | sh
 ```
 
-**Windows** (PowerShell; installs to `%LOCALAPPDATA%\Aria`, adds it to your PATH):
-
-```powershell
-irm https://raw.githubusercontent.com/laopro/aria/main/install.ps1 | iex
-```
-
 Then open a new terminal and run `aria`.
+
+**Windows and macOS**: build from source for now (see below).
 
 Other options:
 

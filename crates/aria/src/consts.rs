@@ -34,7 +34,10 @@ Shortcuts:
         Use your mouse to click in lists if your terminal has mouse support
         Space                     play/pause
         Enter                     select a playlist or a track
+        F1 / F2 / F3 / F4         Home / Search / Now playing / Playlist
         f                         search
+        Tab / Shift+Tab           switch search tabs (All, Songs, Videos, Playlists)
+        Up / Down, PgUp / PgDn    move in lists, Enter to play
         s                         shuffle
         r                         remove a track from the queue
         Arrow Right or >          skip 5 seconds

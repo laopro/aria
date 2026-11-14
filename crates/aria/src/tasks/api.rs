@@ -35,6 +35,17 @@ pub fn spawn_api_task(updater_s: Sender<ManagerMessage>) {
             Ok(api) => {
                 let api = Arc::new(api);
                 let mut set = JoinSet::new();
+                // Listening history, synced like the playlists below.
+                // (Liked Music already comes with the library.)
+                spawn_browse_playlist_task(
+                    YoutubeMusicPlaylistRef {
+                        name: "Historial".to_owned(),
+                        subtitle: "Reproducido recientemente".to_owned(),
+                        browse_id: "FEmusic_history".to_owned(),
+                    },
+                    api.clone(),
+                    updater_s.clone(),
+                );
                 let api_ = api.clone();
                 let updater_s_ = updater_s.clone();
                 set.spawn(async move {
@@ -132,6 +143,10 @@ pub fn spawn_api_task(updater_s: Sender<ManagerMessage>) {
     });
 }
 
+/// YouTube starts answering with empty pages when dozens of playlists are
+/// fetched at once, so only a few load at the same time.
+static BROWSE_LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
+
 static BROWSED_PLAYLISTS: Lazy<Mutex<Vec<(String, String)>>> = Lazy::new(|| Mutex::new(vec![]));
 
 fn spawn_browse_playlist_task(
@@ -168,7 +183,9 @@ fn spawn_browse_playlist_task(
     run_service(async move {
         let guard = format!("Browse playlist {} {}", playlist.name, playlist.browse_id);
         let guard = performance::guard(&guard);
-        match api.get_playlist(&playlist, 5).await {
+        let _permit = BROWSE_LIMIT.acquire().await;
+        // Up to 50 pages of ~100 tracks, so long lists like Liked Music load whole.
+        match api.get_playlist(&playlist, 50).await {
             Ok(videos) => {
                 if videos.len() < 2 {
                     info!("Playlist {} is too small so skipped", playlist.name);

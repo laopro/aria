@@ -160,6 +160,11 @@ impl PlayerState {
             .try_send(ManagerMessage::Autoplay(current.video_id));
     }
 
+    /// True when nothing is playing or loading, so the UI can wake up less often.
+    pub fn is_idle(&self) -> bool {
+        self.pending_stream.is_none() && (self.list.is_empty() || self.sink.is_paused())
+    }
+
     pub fn update(&mut self) {
         PLAYER_RUNNING.store(self.current().is_some(), Ordering::SeqCst);
         self.update_controls();
@@ -238,7 +243,8 @@ impl PlayerState {
         let to_download = self
             .list
             .iter()
-            .skip(self.current)
+            // The current track streams into RAM; only the ones after it are prefetched.
+            .skip(self.current + 1)
             .chain(self.list.iter().take(self.current).rev())
             .filter(|x| {
                 self.music_status.get(&x.video_id) == Some(&MusicDownloadStatus::NotDownloaded)

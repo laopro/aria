@@ -5,7 +5,8 @@ use std::{
 };
 
 use json_extractor::{
-    extract_playlist_info, from_json, get_continuation, get_playlist, get_playlist_search,
+    extract_playlist_info, from_json, get_continuation, get_continuation_token, get_playlist,
+    get_playlist_search,
     get_video, get_video_from_album, parse_radio, Continuation,
 };
 use log::{debug, error, trace};
@@ -472,16 +473,21 @@ impl YoutubeMusicInstance {
         playlist_id: &str,
         mut n_continuations: usize,
     ) -> Result<Vec<YoutubeMusicVideoRef>> {
-        let (playlist_json, mut continuations) = self
-            .browse(
-                &Endpoint::Playlist(playlist_id.to_string()),
-                n_continuations > 0,
-            )
-            .await?;
+        let endpoint = Endpoint::Playlist(playlist_id.to_string());
+        let (mut playlist_json, mut continuations) =
+            self.browse(&endpoint, n_continuations > 0).await?;
         trace!("Fetched playlist");
         debug!("Playlist response: {playlist_json}");
         debug!("Continuations: {continuations:?}");
         let mut videos = parse_playlist(&playlist_json)?;
+        // YouTube now and then answers with an empty page: ask once more.
+        if videos.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+            (playlist_json, continuations) = self.browse(&endpoint, n_continuations > 0).await?;
+            videos = parse_playlist(&playlist_json)?;
+        }
+        let mut pages_left = n_continuations;
+        let mut tokens = from_json(&playlist_json, get_continuation_token)?;
 
         debug!("Videos: {videos:?}");
 
@@ -502,7 +508,72 @@ impl YoutubeMusicInstance {
             }
         }
 
+        // Long playlists (Liked Music, for one) come in pages of about 100
+        // tracks, each ending with the token of the next page.
+        while let Some(token) = tokens.pop() {
+            if pages_left == 0 {
+                break;
+            }
+            pages_left -= 1;
+            // A page can fail or come back empty under load: retry before giving up.
+            let mut fetched = None;
+            for attempt in 0..5u32 {
+                match self.browse_token(&token).await {
+                    Ok(page) => {
+                        let tracks = parse_playlist(&page)?;
+                        if !tracks.is_empty() {
+                            fetched = Some((page, tracks));
+                            break;
+                        }
+                        debug!("Empty playlist page (attempt {attempt})");
+                    }
+                    Err(e) => debug!("Playlist page failed (attempt {attempt}): {e:?}"),
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500 << attempt)).await;
+            }
+            let Some((page, tracks)) = fetched else {
+                break;
+            };
+            let before = videos.len();
+            for video in tracks {
+                push_unique(&mut videos, video);
+            }
+            if videos.len() == before {
+                break;
+            }
+            tokens = from_json(&page, get_continuation_token)?;
+        }
+
         Ok(videos)
+    }
+
+    /// Fetches the next page of a list from its continuation token.
+    async fn browse_token(&self, token: &str) -> Result<Value> {
+        let url = format!(
+            "https://music.youtube.com/youtubei/v1/browse?key={}&prettyPrint=false",
+            self.innertube_api_key
+        );
+        let user = match &self.account_id {
+            Some(id) => format!(r#","user":{{"onBehalfOfUser":"{id}"}}"#),
+            None => String::new(),
+        };
+        let body = format!(
+            r#"{{"context":{{"client":{{"clientName":"WEB_REMIX","clientVersion":"{}"}}{user}}},"continuation":"{token}"}}"#,
+            self.client_version
+        );
+        let text = self
+            .post(&url, body)
+            .send()
+            .await
+            .map_err(YoutubeMusicError::RequestError)?
+            .text()
+            .await
+            .map_err(YoutubeMusicError::RequestError)?;
+        let json: Value = serde_json::from_str(&text).map_err(YoutubeMusicError::SerdeJson)?;
+        if json.get("error").is_some() {
+            return Err(YoutubeMusicError::YoutubeMusicError(json));
+        }
+        Ok(json)
     }
 
     /// Loads a playlist and its display name in one go.
@@ -599,8 +670,19 @@ impl YoutubeMusicInstance {
         Ok(SearchResults { videos, playlists })
     }
 
+    /// Unfiltered search, first page only: videos (songs included) and playlists.
+    pub async fn search_unfiltered(&self, query: &str) -> Result<SearchResults> {
+        let (json, _) = self
+            .browse(&Endpoint::Search(query.to_string()), false)
+            .await?;
+        Ok(SearchResults {
+            videos: from_json(&json, get_video)?,
+            playlists: from_json(&json, get_playlist_search)?,
+        })
+    }
+
     /// Queries the "songs" shelf only, which holds the official tracks.
-    async fn search_songs(&self, query: &str) -> Result<Vec<YoutubeMusicVideoRef>> {
+    pub async fn search_songs(&self, query: &str) -> Result<Vec<YoutubeMusicVideoRef>> {
         let raw = self
             .browse_raw_with(
                 "search",

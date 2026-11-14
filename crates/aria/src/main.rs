@@ -37,11 +37,18 @@ mod tasks;
 
 pub use database::DATABASE;
 
-use mimalloc::MiMalloc;
-
-// Changes the allocator to improve performance especially on Windows
+// mimalloc is faster on Windows; elsewhere the system allocator uses less memory.
+#[cfg(target_os = "windows")]
 #[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// Hands freed memory back to the system (glibc keeps it otherwise).
+pub fn trim_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
 
 fn run_service<T>(future: T) -> tokio::task::JoinHandle<()>
 where
@@ -65,6 +72,15 @@ pub fn try_get_cookies() -> Option<String> {
 }
 
 fn main() {
+    // One shared heap instead of one per thread: far less idle memory.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 1);
+        // Big temporary buffers (API responses, audio) go straight back to the
+        // system when freed instead of staying in the heap.
+        libc::mallopt(libc::M_MMAP_THRESHOLD, 64 * 1024);
+        libc::mallopt(libc::M_TRIM_THRESHOLD, 128 * 1024);
+    }
     // Remove the previous binary left behind by `aria --update`.
     if let Ok(exe) = std::env::current_exe() {
         let _ = std::fs::remove_file(exe.with_extension("old"));
@@ -210,7 +226,7 @@ fn cookies_from_rookie(specific_browser: Option<String>) -> Option<String> {
     let loaded = match loaded {
         Ok(loaded) => loaded,
         Err(e) => {
-            eprintln!("[ERROR] Can't read browser cookies: {e}");
+            error!("Can't read browser cookies: {e}");
             return None;
         }
     };
@@ -281,6 +297,7 @@ fn cookies_from_ytdlp(browser: &str) -> Option<String> {
             "--cookies",
             jar.to_str()?,
             "--skip-download",
+            "--ignore-no-formats-error",
             "--no-warnings",
             "--quiet",
             "https://www.youtube.com/watch?v=BaW_jenozKc",
@@ -288,10 +305,10 @@ fn cookies_from_ytdlp(browser: &str) -> Option<String> {
         .output()
         .ok()?;
 
+    // yt-dlp writes the cookie jar before extracting the video, so the jar is
+    // good even when the extraction itself fails afterwards.
     if !output.status.success() {
-        info!("yt-dlp could not read cookies from {browser}");
-        let _ = std::fs::remove_file(&jar);
-        return None;
+        info!("yt-dlp exited with an error for {browser}; using its cookie jar if present");
     }
 
     let text = std::fs::read_to_string(&jar).ok()?;
@@ -374,6 +391,82 @@ fn login(specific_browser: Option<String>) {
     }
 
     write_headers(&path, &cookie, UA);
+}
+
+/// True while the in-app sign-in waits for the browser session.
+pub static LOGIN_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// In-app sign-in: opens YouTube Music in the browser, waits until the browser
+/// holds a signed-in session, stores it and syncs the library. Never prints,
+/// because the TUI owns the terminal.
+pub fn start_login(updater: Sender<ManagerMessage>) {
+    use std::sync::atomic::Ordering;
+    if LOGIN_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    run_service(async move {
+        let status = |text: &str| {
+            let _ = updater.send(ManagerMessage::Status(format!(" {text}")));
+        };
+        // `thorough` also asks yt-dlp, which finds profiles `rookie` misses but is slower.
+        let read = |thorough: bool| async move {
+            tokio::task::spawn_blocking(move || {
+                if thorough {
+                    cookies(None)
+                } else {
+                    cookies_from_rookie(None)
+                }
+            })
+            .await
+            .ok()
+            .flatten()
+            .filter(|cookie| cookie.contains("SAPISID="))
+        };
+
+        status("Looking for a signed-in browser session...");
+        let mut session = read(true).await;
+        if session.is_none() {
+            open_browser(
+                "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmusic.youtube.com",
+            );
+            status("Sign in on the browser page that just opened. Waiting...");
+            for attempt in 1..=60 {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                session = read(attempt % 3 == 0).await;
+                if session.is_some() {
+                    break;
+                }
+            }
+        }
+
+        match session {
+            Some(cookie) => {
+                let path = match get_header_file() {
+                    Ok((_, p)) | Err((_, p)) => p,
+                };
+                let content = format!("Cookie: {cookie}\nUser-Agent: {DEFAULT_USER_AGENT}\n");
+                match std::fs::write(&path, content) {
+                    Ok(_) => {
+                        // The file is a credential: keep it private to this user.
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = std::fs::set_permissions(
+                                &path,
+                                std::fs::Permissions::from_mode(0o600),
+                            );
+                        }
+                        status("Signed in. Syncing your library...");
+                        tasks::api::spawn_api_task(updater.clone());
+                    }
+                    Err(e) => status(&format!("Could not save the session: {e}")),
+                }
+            }
+            None => status("Sign-in timed out. Try again, or run `aria --login` in a terminal"),
+        }
+        LOGIN_RUNNING.store(false, Ordering::SeqCst);
+    });
 }
 
 /// Stores the session in `headers.txt`, backing up the previous one.

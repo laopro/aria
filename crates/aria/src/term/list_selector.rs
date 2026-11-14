@@ -103,7 +103,12 @@ impl ListSelector {
         Paragraph::new(Line::from(vec![
             Span::styled(" ", Style::default()),
             Span::styled(
-                render_title.trim().to_string(),
+                format!(
+                    "{}  {}/{}",
+                    render_title.trim(),
+                    if self.list_size == 0 { 0 } else { self.current_position + 1 },
+                    self.list_size
+                ),
                 Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
             ),
         ]))
@@ -139,5 +144,6 @@ impl ListSelector {
             buf,
             &mut ListState::default(),
         );
+        super::draw_scrollbar(buf, list_area, self.list_size, a);
     }
 }

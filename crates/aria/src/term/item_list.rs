@@ -172,7 +172,12 @@ impl<Action: ListItemAction + Clone> Widget for &ListItem<Action> {
         Paragraph::new(Line::from(vec![
             Span::styled(" ", Style::default()),
             Span::styled(
-                self.title.trim().to_string(),
+                format!(
+                    "{}  {}/{}",
+                    self.title.trim(),
+                    if self.list.is_empty() { 0 } else { self.current_position + 1 },
+                    self.list.len()
+                ),
                 Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
             ),
         ]))
@@ -207,5 +212,11 @@ impl<Action: ListItemAction + Clone> Widget for &ListItem<Action> {
             buf,
             &mut ListState::default(),
         );
+        let first = self
+            .get_item_frame(list_area.height as usize)
+            .first()
+            .map(|(index, _)| *index)
+            .unwrap_or(0);
+        super::draw_scrollbar(buf, list_area, self.list.len(), first);
     }
 }
