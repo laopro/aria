@@ -483,11 +483,17 @@ impl YoutubeMusicInstance {
         // YouTube now and then answers with an empty page: ask once more.
         if videos.is_empty() {
             tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-            (playlist_json, continuations) = self.browse(&endpoint, n_continuations > 0).await?;
+            (playlist_json, _) = self.browse(&endpoint, false).await?;
             videos = parse_playlist(&playlist_json)?;
         }
+        // Follow only the track list itself, never the suggestions under it.
+        if n_continuations > 0 {
+            continuations = playlist_shelf_continuations(&playlist_json)?;
+        }
         let mut pages_left = n_continuations;
-        let mut tokens = from_json(&playlist_json, get_continuation_token)?;
+        // Only the track list's own "load more" token: the page also carries one
+        // for the "Suggestions" shelf, whose tracks are not part of the playlist.
+        let mut tokens = playlist_shelf_tokens(&playlist_json)?;
 
         debug!("Videos: {videos:?}");
 
@@ -727,6 +733,251 @@ impl YoutubeMusicInstance {
             }
         }
         Ok(SearchResults { playlists, videos })
+    }
+}
+
+/// Browse id of the lyrics page linked from a `next` response.
+fn find_lyrics_id(value: &Value) -> Option<String> {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(id)) = map.get("browseId") {
+                if id.starts_with("MPLYt") {
+                    return Some(id.clone());
+                }
+            }
+            map.values().find_map(find_lyrics_id)
+        }
+        Value::Array(items) => items.iter().find_map(find_lyrics_id),
+        _ => None,
+    }
+}
+
+/// Lyrics text of a lyrics page.
+fn find_lyrics_text(value: &Value) -> Option<String> {
+    match value {
+        Value::Object(map) => {
+            if let Some(shelf) = map.get("musicDescriptionShelfRenderer") {
+                let runs = shelf.pointer("/description/runs")?.as_array()?;
+                let text: String = runs
+                    .iter()
+                    .filter_map(|run| run.get("text").and_then(Value::as_str))
+                    .collect();
+                return (!text.trim().is_empty()).then_some(text);
+            }
+            map.values().find_map(find_lyrics_text)
+        }
+        Value::Array(items) => items.iter().find_map(find_lyrics_text),
+        _ => None,
+    }
+}
+
+/// Old-format continuations found inside the playlist's track shelf.
+fn playlist_shelf_continuations(value: &Value) -> Result<Vec<Continuation>> {
+    let mut found = Vec::new();
+    shelves(value, &mut found);
+    let mut continuations = Vec::new();
+    for shelf in found {
+        continuations.extend(from_json(shelf, get_continuation)?);
+    }
+    Ok(continuations)
+}
+
+/// The track shelves of a playlist page (not the "Suggestions" one).
+fn shelves<'a>(value: &'a Value, found: &mut Vec<&'a Value>) {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    if key == "musicPlaylistShelfRenderer" {
+                        found.push(child);
+                    } else {
+                        shelves(child, found);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| shelves(item, found)),
+            _ => {}
+        }
+}
+
+/// Continuation tokens found inside the playlist's track shelf.
+fn playlist_shelf_tokens(value: &Value) -> Result<Vec<String>> {
+    let mut found = Vec::new();
+    shelves(value, &mut found);
+    let mut tokens = Vec::new();
+    for shelf in found {
+        tokens.extend(from_json(shelf, get_continuation_token)?);
+    }
+    Ok(tokens)
+}
+
+/// `setVideoId` of the entry for `video_id` in a playlist page; removing a
+/// track from a playlist needs it.
+fn find_set_video_id(value: &Value, video_id: &str) -> Option<String> {
+    match value {
+        Value::Object(map) => {
+            if let Some(item) = map.get("playlistItemData") {
+                if item.get("videoId").and_then(Value::as_str) == Some(video_id) {
+                    if let Some(id) = item.get("playlistSetVideoId").and_then(Value::as_str) {
+                        return Some(id.to_owned());
+                    }
+                }
+            }
+            map.values().find_map(|v| find_set_video_id(v, video_id))
+        }
+        Value::Array(items) => items.iter().find_map(|v| find_set_video_id(v, video_id)),
+        _ => None,
+    }
+}
+
+fn json_string(text: &str) -> String {
+    serde_json::Value::String(text.to_owned()).to_string()
+}
+
+/// The id the edit endpoints expect: a browse id without its `VL` prefix.
+fn playlist_id(browse_id: &str) -> &str {
+    browse_id.strip_prefix("VL").unwrap_or(browse_id)
+}
+
+/// Changes to the signed-in account. They all need a session.
+impl YoutubeMusicInstance {
+    /// Calls an action endpoint with `fields` (JSON members) next to the context.
+    async fn action(&self, route: &str, fields: &str) -> Result<Value> {
+        if self.sapisid.is_empty() {
+            return Err(YoutubeMusicError::NeedToLogin);
+        }
+        let url = format!(
+            "https://music.youtube.com/youtubei/v1/{route}?key={}&prettyPrint=false",
+            self.innertube_api_key
+        );
+        let user = match &self.account_id {
+            Some(id) => format!(r#","user":{{"onBehalfOfUser":"{id}"}}"#),
+            None => String::new(),
+        };
+        let body = format!(
+            r#"{{"context":{{"client":{{"clientName":"WEB_REMIX","clientVersion":"{}"}}{user}}},{fields}}}"#,
+            self.client_version
+        );
+        let text = self
+            .post(&url, body)
+            .send()
+            .await
+            .map_err(YoutubeMusicError::RequestError)?
+            .text()
+            .await
+            .map_err(YoutubeMusicError::RequestError)?;
+        let json: Value = serde_json::from_str(&text).map_err(YoutubeMusicError::SerdeJson)?;
+        if json.get("error").is_some() {
+            return Err(YoutubeMusicError::YoutubeMusicError(json));
+        }
+        Ok(json)
+    }
+
+    /// Likes a track, or takes the like back.
+    pub async fn set_liked(&self, video_id: &str, liked: bool) -> Result<()> {
+        let route = if liked { "like/like" } else { "like/removelike" };
+        self.action(route, &format!(r#""target":{{"videoId":{}}}"#, json_string(video_id)))
+            .await
+            .map(|_| ())
+    }
+
+    /// Creates a private playlist and returns its browse id.
+    pub async fn create_playlist(&self, title: &str) -> Result<String> {
+        let json = self
+            .action(
+                "playlist/create",
+                &format!(r#""title":{},"privacyStatus":"PRIVATE""#, json_string(title)),
+            )
+            .await?;
+        match json.get("playlistId").and_then(Value::as_str) {
+            Some(id) => Ok(format!("VL{id}")),
+            None => Err(YoutubeMusicError::YoutubeMusicError(json)),
+        }
+    }
+
+    pub async fn delete_playlist(&self, browse_id: &str) -> Result<()> {
+        self.action(
+            "playlist/delete",
+            &format!(r#""playlistId":{}"#, json_string(playlist_id(browse_id))),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    async fn edit_playlist(&self, browse_id: &str, action: &str) -> Result<()> {
+        let json = self
+            .action(
+                "browse/edit_playlist",
+                &format!(
+                    r#""playlistId":{},"actions":[{action}]"#,
+                    json_string(playlist_id(browse_id))
+                ),
+            )
+            .await?;
+        match json.get("status").and_then(Value::as_str) {
+            Some("STATUS_SUCCEEDED") => Ok(()),
+            _ => Err(YoutubeMusicError::YoutubeMusicError(json)),
+        }
+    }
+
+    pub async fn add_to_playlist(&self, browse_id: &str, video_id: &str) -> Result<()> {
+        self.edit_playlist(
+            browse_id,
+            &format!(
+                r#"{{"action":"ACTION_ADD_VIDEO","addedVideoId":{}}}"#,
+                json_string(video_id)
+            ),
+        )
+        .await
+    }
+
+    /// Removes a track from a playlist. `Ok(false)` when the track is not in it.
+    pub async fn remove_from_playlist(&self, browse_id: &str, video_id: &str) -> Result<bool> {
+        let (mut page, _) = self
+            .browse(&Endpoint::Playlist(browse_id.to_string()), false)
+            .await?;
+        // Long playlists come in pages: look through them until the track shows up.
+        let mut first_page = true;
+        for _ in 0..60 {
+            if let Some(set_video_id) = find_set_video_id(&page, video_id) {
+                self.edit_playlist(
+                    browse_id,
+                    &format!(
+                        r#"{{"action":"ACTION_REMOVE_VIDEO","removedVideoId":{},"setVideoId":{}}}"#,
+                        json_string(video_id),
+                        json_string(&set_video_id)
+                    ),
+                )
+                .await?;
+                return Ok(true);
+            }
+            let tokens = if first_page {
+                playlist_shelf_tokens(&page)?
+            } else {
+                from_json(&page, get_continuation_token)?
+            };
+            first_page = false;
+            let Some(token) = tokens.into_iter().next_back() else {
+                break;
+            };
+            page = self.browse_token(&token).await?;
+        }
+        Ok(false)
+    }
+}
+
+impl YoutubeMusicInstance {
+    /// Lyrics of a track as plain text, when YouTube Music has them.
+    pub async fn get_lyrics(&self, video_id: &str) -> Result<Option<String>> {
+        let next = self.browse_raw_with("next", "videoId", video_id, "").await?;
+        let json: Value = serde_json::from_str(&next).map_err(YoutubeMusicError::SerdeJson)?;
+        let Some(browse_id) = find_lyrics_id(&json) else {
+            return Ok(None);
+        };
+        let page = self
+            .browse_raw_with("browse", "browseId", &browse_id, "")
+            .await?;
+        let json: Value = serde_json::from_str(&page).map_err(YoutubeMusicError::SerdeJson)?;
+        Ok(find_lyrics_text(&json))
     }
 }
 

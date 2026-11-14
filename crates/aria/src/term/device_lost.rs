@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use super::{EventResponse, ManagerMessage, Screen, Screens, TEXT_DIM};
+use super::{theme::THEME, EventResponse, ManagerMessage, Screen, Screens};
 
 // Audio device not connected!
 pub struct DeviceLost(pub Vec<String>, pub Option<ManagerMessage>);
@@ -38,7 +38,7 @@ impl Screen for DeviceLost {
                 "{}\n\n[Enter] retry   ·   [Esc] quit",
                 self.0.join("\n")
             ))
-            .style(Style::default().fg(TEXT_DIM))
+            .style(Style::default().fg(THEME.text_dim))
             .alignment(Alignment::Center),
             area,
         );

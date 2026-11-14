@@ -21,11 +21,14 @@ use crate::{
     utils::get_project_dirs,
 };
 
+mod account;
 mod config;
 mod consts;
+mod covers;
 mod database;
 mod errors;
 mod shutdown;
+mod state;
 mod structures;
 mod systems;
 mod term;
@@ -120,7 +123,7 @@ fn main() {
                 }
                 return;
             }
-            "--update" => {
+            "--update" | "update" => {
                 update();
                 return;
             }
@@ -393,6 +396,77 @@ fn login(specific_browser: Option<String>) {
     write_headers(&path, &cookie, UA);
 }
 
+/// Bumped every time a new session is stored, so cached API clients are rebuilt.
+pub static SESSION_VERSION: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Set when the account stopped accepting the stored session.
+pub static SESSION_EXPIRED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Writes the session file, private to this user, and retires the old clients.
+fn store_session(cookie: &str) -> std::io::Result<()> {
+    let path = match get_header_file() {
+        Ok((_, p)) | Err((_, p)) => p,
+    };
+    std::fs::write(
+        &path,
+        format!("Cookie: {cookie}\nUser-Agent: {DEFAULT_USER_AGENT}\n"),
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    SESSION_VERSION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    SESSION_EXPIRED.store(false, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
+/// Google rotates session cookies every few hours, so a stored session goes
+/// stale while the browser's stays good. This reads it from the browser again
+/// and reloads the library; it gives up after one try per expiry.
+pub fn refresh_session(updater: Sender<ManagerMessage>) {
+    use std::sync::atomic::Ordering;
+    static TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let expired = |updater: &Sender<ManagerMessage>| {
+        SESSION_EXPIRED.store(true, Ordering::SeqCst);
+        let _ = updater.send(ManagerMessage::Status(
+            " Session expired: press F8 to sign in again".to_owned(),
+        ));
+    };
+    if TRIED.swap(true, Ordering::SeqCst) {
+        expired(&updater);
+        return;
+    }
+    run_service(async move {
+        let _ = updater.send(ManagerMessage::Status(
+            " Session expired: reading it again from your browser…".to_owned(),
+        ));
+        let cookie = tokio::task::spawn_blocking(|| cookies(None))
+            .await
+            .ok()
+            .flatten()
+            .filter(|cookie| cookie.contains("SAPISID="));
+        match cookie {
+            Some(cookie) if store_session(&cookie).is_ok() => {
+                tasks::api::BROWSED_PLAYLISTS.lock().unwrap().clear();
+                let _ = updater.send(ManagerMessage::Library(
+                    account::LibraryChange::Reloading,
+                ));
+                let _ = updater.send(ManagerMessage::Status(
+                    " Session renewed. Syncing your library...".to_owned(),
+                ));
+                tasks::api::spawn_api_task(updater.clone());
+                // A later expiry may try again, but not in a loop right now.
+                tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                TRIED.store(false, Ordering::SeqCst);
+            }
+            _ => expired(&updater),
+        }
+    });
+}
+
 /// True while the in-app sign-in waits for the browser session.
 pub static LOGIN_RUNNING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -441,28 +515,17 @@ pub fn start_login(updater: Sender<ManagerMessage>) {
         }
 
         match session {
-            Some(cookie) => {
-                let path = match get_header_file() {
-                    Ok((_, p)) | Err((_, p)) => p,
-                };
-                let content = format!("Cookie: {cookie}\nUser-Agent: {DEFAULT_USER_AGENT}\n");
-                match std::fs::write(&path, content) {
-                    Ok(_) => {
-                        // The file is a credential: keep it private to this user.
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::PermissionsExt;
-                            let _ = std::fs::set_permissions(
-                                &path,
-                                std::fs::Permissions::from_mode(0o600),
-                            );
-                        }
-                        status("Signed in. Syncing your library...");
-                        tasks::api::spawn_api_task(updater.clone());
-                    }
-                    Err(e) => status(&format!("Could not save the session: {e}")),
+            Some(cookie) => match store_session(&cookie) {
+                Ok(_) => {
+                    tasks::api::BROWSED_PLAYLISTS.lock().unwrap().clear();
+                    let _ = updater.send(ManagerMessage::Library(
+                        account::LibraryChange::Reloading,
+                    ));
+                    status("Signed in. Syncing your library...");
+                    tasks::api::spawn_api_task(updater.clone());
                 }
-            }
+                Err(e) => status(&format!("Could not save the session: {e}")),
+            },
             None => status("Sign-in timed out. Try again, or run `aria --login` in a terminal"),
         }
         LOGIN_RUNNING.store(false, Ordering::SeqCst);
@@ -498,7 +561,7 @@ fn write_headers(path: &Path, cookie: &str, user_agent: &str) -> bool {
     }
 }
 
-fn open_browser(url: &str) {
+pub fn open_browser(url: &str) {
     #[cfg(target_os = "windows")]
     let _ = std::process::Command::new("cmd")
         .args(["/C", "start", "", url])
@@ -549,7 +612,25 @@ pub fn is_guest() -> bool {
 }
 
 /// Builds the API client: saved session first, anonymous InnerTube otherwise.
+/// The shared YouTube Music session. It is built once and reused; signing in
+/// (or out) replaces it.
 pub async fn api_instance() -> Option<std::sync::Arc<ytpapi2::YoutubeMusicInstance>> {
+    type Cached = Option<((bool, usize), std::sync::Arc<ytpapi2::YoutubeMusicInstance>)>;
+    static CACHE: Lazy<tokio::sync::Mutex<Cached>> = Lazy::new(Default::default);
+    // The key changes when the user signs in or the session is read again.
+    let key = (is_guest(), SESSION_VERSION.load(std::sync::atomic::Ordering::SeqCst));
+    let mut cache = CACHE.lock().await;
+    if let Some((cached_key, api)) = cache.as_ref() {
+        if *cached_key == key {
+            return Some(api.clone());
+        }
+    }
+    let api = build_api_instance().await?;
+    *cache = Some((key, api.clone()));
+    Some(api)
+}
+
+async fn build_api_instance() -> Option<std::sync::Arc<ytpapi2::YoutubeMusicInstance>> {
     use std::sync::Arc;
     if let Some(cookies) = try_get_cookies() {
         let mut headermap = ytpapi2::HeaderMap::new();
@@ -580,8 +661,12 @@ fn update() {
     const REPO: &str = "laopro/aria";
     const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
+    // An AppImage runs from a read-only mount: replace the .AppImage file itself.
+    let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from);
     let asset_name = if cfg!(windows) {
         "aria-windows-x86_64.exe"
+    } else if cfg!(target_os = "linux") && appimage.is_some() {
+        "aria-linux-x86_64.AppImage"
     } else if cfg!(target_os = "linux") {
         "aria-linux-x86_64"
     } else {
@@ -621,25 +706,32 @@ fn update() {
         .unwrap_or_default()
         .trim_start_matches('v')
         .to_string();
-    let url = release["assets"]
+    let asset = release["assets"]
         .as_array()
         .into_iter()
         .flatten()
-        .find(|asset| asset["name"].as_str() == Some(asset_name))
+        .find(|asset| asset["name"].as_str() == Some(asset_name));
+    let url = asset
         .and_then(|asset| asset["browser_download_url"].as_str())
         .map(str::to_string);
+    let expected_size = asset.and_then(|asset| asset["size"].as_u64());
 
     let Some(url) = url else {
         println!("[ERROR] The latest release has no {asset_name} asset");
         return;
     };
 
-    if latest == CURRENT {
+    // Compare numerically, so an older release never "updates" a newer build.
+    let version = |text: &str| -> Vec<u64> {
+        text.split('.').map(|part| part.parse().unwrap_or(0)).collect()
+    };
+    if version(&latest) <= version(CURRENT) {
         println!("Aria {CURRENT} is already up to date.");
+        update_ytdlp();
         return;
     }
 
-    let exe = match std::env::current_exe() {
+    let exe = match appimage.map(Ok).unwrap_or_else(std::env::current_exe) {
         Ok(path) => path,
         Err(e) => {
             println!("[ERROR] Could not locate the running executable: {e}");
@@ -672,6 +764,12 @@ fn update() {
         return;
     }
     drop(file);
+    let downloaded = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+    if expected_size.map(|size| size != downloaded).unwrap_or(downloaded == 0) {
+        println!("[ERROR] The download was incomplete; nothing was changed. Try again.");
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
 
     // A running executable cannot be overwritten on Windows, but it can be
     // renamed. The leftover is deleted on the next start.
@@ -695,6 +793,26 @@ fn update() {
     }
 
     println!("Updated to Aria {latest}. Restart Aria to use it.");
+    update_ytdlp();
+}
+
+/// Updates the yt-dlp that the installer put next to Aria (a system one is left alone).
+fn update_ytdlp() {
+    let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    else {
+        return;
+    };
+    let ytdlp = dir.join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" });
+    if !ytdlp.exists() {
+        return;
+    }
+    println!("Updating yt-dlp...");
+    match std::process::Command::new(&ytdlp).arg("-U").status() {
+        Ok(status) if status.success() => {}
+        _ => println!("[WARN] Could not update yt-dlp; Aria still works with the current one."),
+    }
 }
 
 async fn app_start_main(updater_r: Receiver<ManagerMessage>, updater_s: Sender<ManagerMessage>) {

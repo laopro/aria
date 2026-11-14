@@ -71,10 +71,7 @@ pub fn spawn_api_task(updater_s: Sender<ManagerMessage>) {
                     let search_results = api_.get_library(&Endpoint::MusicLikedPlaylists, 1).await;
                     match search_results {
                         Ok(e) if e.is_empty() => {
-                            let _ = updater_s_.send(ManagerMessage::Status(
-                                " Session expired: run `aria --login` to load your playlists"
-                                    .to_owned(),
-                            ));
+                            crate::refresh_session(updater_s_.clone());
                         }
                         Ok(e) => {
                             for playlist in e {
@@ -145,9 +142,32 @@ pub fn spawn_api_task(updater_s: Sender<ManagerMessage>) {
 
 /// YouTube starts answering with empty pages when dozens of playlists are
 /// fetched at once, so only a few load at the same time.
+/// Playlists still loading; Home shows placeholder rows while it is above zero.
+pub static SYNCING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 static BROWSE_LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
 
-static BROWSED_PLAYLISTS: Lazy<Mutex<Vec<(String, String)>>> = Lazy::new(|| Mutex::new(vec![]));
+/// Playlists loaded from the account in this session: `(name, browse id)`.
+pub static BROWSED_PLAYLISTS: Lazy<Mutex<Vec<(String, String)>>> =
+    Lazy::new(|| Mutex::new(vec![]));
+
+/// Loads the account library again, so changes made elsewhere show up.
+pub fn resync(updater: Sender<ManagerMessage>) {
+    if crate::is_guest() {
+        let _ = updater.send(ManagerMessage::Toast("Sign in first (F8)".to_owned()));
+        return;
+    }
+    if SYNCING.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+        let _ = updater.send(ManagerMessage::Toast("Already syncing".to_owned()));
+        return;
+    }
+    BROWSED_PLAYLISTS.lock().unwrap().clear();
+    let _ = updater.send(ManagerMessage::Library(
+        crate::account::LibraryChange::Reloading,
+    ));
+    let _ = updater.send(ManagerMessage::Toast("Syncing with your account…".to_owned()));
+    spawn_api_task(updater);
+}
 
 fn spawn_browse_playlist_task(
     playlist: YoutubeMusicPlaylistRef,
@@ -180,7 +200,15 @@ fn spawn_browse_playlist_task(
         k.push((playlist.name.clone(), playlist.browse_id.clone()));
     }
 
+    SYNCING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     run_service(async move {
+        struct Done;
+        impl Drop for Done {
+            fn drop(&mut self) {
+                SYNCING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        let _done = Done;
         let guard = format!("Browse playlist {} {}", playlist.name, playlist.browse_id);
         let guard = performance::guard(&guard);
         let _permit = BROWSE_LIMIT.acquire().await;
@@ -191,9 +219,16 @@ fn spawn_browse_playlist_task(
                     info!("Playlist {} is too small so skipped", playlist.name);
                     return;
                 }
+                if playlist.browse_id == crate::account::LIKED_ID {
+                    crate::account::set_liked_tracks(&videos);
+                }
                 let _ = updater_s.send(
-                    ManagerMessage::AddElementToChooser((playlist.name.clone(), videos))
-                        .pass_to(Screens::Playlist),
+                    ManagerMessage::AddPlaylist(
+                        playlist.name.clone(),
+                        playlist.browse_id.clone(),
+                        videos,
+                    )
+                    .pass_to(Screens::Playlist),
                 );
             }
             Err(e) => {

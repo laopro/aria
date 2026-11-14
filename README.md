@@ -15,8 +15,21 @@ only if you want your own library and playlists.
 - **Optional sign-in** from inside the app (`F8` or the sidebar button): it
   reuses the YouTube Music session of your browser and loads your library,
   playlists, Liked Music and history.
+- **Two-way account sync:** like tracks, add them to or remove them from your
+  playlists, create and delete playlists; changes go to YouTube Music right away.
+  Playlists refresh when you open them, and `F5` on Home reloads the whole
+  library. An expired session is read again from the browser by itself.
+- **Picks up where you left:** the open playlist, the queue, the track and its
+  position, the volume, repeat and the panel come back on the next start.
 - **Search tabs:** All (best matches first), Songs, Videos and Playlists.
-- **Queue panel** on the right (`F6` or the Queue button).
+- **Right panel** with the queue and the lyrics (`F6`, `F7`), remembered between runs
+  together with the volume and the current track.
+- **Album cover** in the player and, larger, in the right panel (24-bit color
+  terminals); only covers of played tracks are saved, at 3 KB each.
+- **Mouse everywhere:** double click plays, right click opens a menu (play next,
+  add to queue, copy link...), the wheel scrolls, scrollbars and the progress bar drag.
+- **Themes:** set `theme = "red"`, `"mono"` or `"light"` in `config.toml`.
+- Press `?` inside Aria for every key and mouse action.
 - **Mouse-first UI:** click the sidebar, lists, player buttons, progress bar and
   volume bar. Drag the progress line to seek.
 - **Import any playlist** by pasting a YouTube Music link in the Home screen.
@@ -74,10 +87,13 @@ cargo build --release
 ## Update
 
 ```bash
-aria --update
+aria update
 ```
 
-Downloads the latest release and replaces the installed binary (Windows and Linux).
+Downloads the latest release, checks it arrived whole, replaces the installed
+binary (or the AppImage) and updates the `yt-dlp` that the installer put next to it.
+
+On Aria 0.3.0 and older, type `aria --update` (with dashes) once.
 
 ## Usage
 

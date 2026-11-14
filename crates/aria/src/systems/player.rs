@@ -37,6 +37,37 @@ pub struct PlayerState {
     stream_rx: Receiver<(String, Result<Vec<u8>, String>)>,
     pending_stream: Option<String>,
     autoplay_requested: Option<String>,
+    pub repeat: Repeat,
+    /// Set when a saved queue is restored: the first track loads paused.
+    pub start_paused: bool,
+    /// Where to continue the restored track once it loads.
+    pub resume_at: Option<std::time::Duration>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum Repeat {
+    #[default]
+    Off,
+    All,
+    One,
+}
+
+impl Repeat {
+    pub fn next(self) -> Self {
+        match self {
+            Repeat::Off => Repeat::All,
+            Repeat::All => Repeat::One,
+            Repeat::One => Repeat::Off,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Repeat::Off => "off",
+            Repeat::All => "all",
+            Repeat::One => "one",
+        }
+    }
 }
 
 /// How many upcoming tracks to pre-download to disk.
@@ -83,6 +114,9 @@ impl PlayerState {
             stream_rx,
             pending_stream: None,
             autoplay_requested: None,
+            repeat: Repeat::Off,
+            start_paused: false,
+            resume_at: None,
         }
     }
 
@@ -102,7 +136,10 @@ impl PlayerState {
     /// Snapshot used by the global player bar.
     pub fn now_playing(&self) -> Option<crate::term::NowPlaying> {
         let video = self.current()?;
-        let elapsed = self.sink.elapsed().as_secs();
+        let elapsed = match self.resume_at {
+            Some(at) if self.start_paused => at.as_secs(),
+            _ => self.sink.elapsed().as_secs(),
+        };
         let total = self.total_seconds().unwrap_or(0);
         let ratio = if total > 0 {
             (elapsed as f64 / total as f64).clamp(0.0, 1.0)
@@ -115,7 +152,7 @@ impl PlayerState {
             elapsed,
             total,
             ratio,
-            paused: self.sink.is_paused(),
+            paused: self.sink.is_paused() || self.start_paused,
         })
     }
 
@@ -148,7 +185,7 @@ impl PlayerState {
         let Some(current) = self.current().cloned() else {
             return;
         };
-        if self.current + 1 < self.list.len() {
+        if self.current + 1 < self.list.len() || self.repeat != Repeat::Off {
             return;
         }
         if self.autoplay_requested.as_deref() == Some(current.video_id.as_str()) {
@@ -162,7 +199,8 @@ impl PlayerState {
 
     /// True when nothing is playing or loading, so the UI can wake up less often.
     pub fn is_idle(&self) -> bool {
-        self.pending_stream.is_none() && (self.list.is_empty() || self.sink.is_paused())
+        self.pending_stream.is_none()
+            && (self.list.is_empty() || self.sink.is_paused() || self.start_paused)
     }
 
     pub fn update(&mut self) {
@@ -182,7 +220,12 @@ impl PlayerState {
         }
         if self.sink.is_finished() {
             if self.pending_stream.is_none() && self.rtcurrent.as_ref() == self.current() {
-                self.set_relative_current(1);
+                match self.repeat {
+                    // Same index again: the cleared `rtcurrent` makes it load anew.
+                    Repeat::One => {}
+                    Repeat::All if self.current + 1 >= self.list.len() => self.current = 0,
+                    _ => self.set_relative_current(1),
+                }
                 self.rtcurrent = None;
             }
             self.handle_stream_errors();
@@ -270,10 +313,15 @@ impl PlayerState {
                     Ok(bytes) => {
                         if let Err(e) = self.sink.play_bytes(bytes) {
                             error!("could not play streamed audio for {id}: {e:?}");
+                        } else if let Some(at) = self.resume_at.take() {
+                            self.sink.seek_to(at);
                         }
                     }
                     Err(e) => {
                         error!("stream fetch failed for {id}: {e}");
+                        let _ = self.updater.send(ManagerMessage::Toast(
+                            "Track not available, skipping".to_owned(),
+                        ));
                         self.music_status
                             .insert(id, MusicDownloadStatus::DownloadFailed);
                     }
@@ -284,7 +332,8 @@ impl PlayerState {
 
     /// Starts fetching the current track into RAM when it is not already on disk.
     fn maybe_fetch_current(&mut self) {
-        if self.pending_stream.is_some()
+        if self.start_paused
+            || self.pending_stream.is_some()
             || self.is_current_downloaded()
             || self.rtcurrent.as_ref() == self.current()
         {

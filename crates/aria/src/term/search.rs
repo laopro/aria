@@ -8,14 +8,10 @@ use log::error;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::Paragraph,
     Frame,
 };
 use tokio::task::JoinHandle;
-use ytpapi2::{
-    SearchResults, YoutubeMusicInstance, YoutubeMusicPlaylistRef, YoutubeMusicVideoRef,
-};
+use ytpapi2::{SearchResults, YoutubeMusicPlaylistRef, YoutubeMusicVideoRef};
 
 use crate::{
     consts::CONFIG,
@@ -27,8 +23,11 @@ use crate::{
 
 use super::{
     format_track,
-    item_list::{ListItem, ListItemAction},
-    EventResponse, ManagerMessage, Screen, Screens, ACCENT, ACCENT_BG, TEXT, TEXT_DIM,
+    item_list::{ListEvent, ListItem, ListItemAction},
+    menu::MenuTarget,
+    theme::THEME,
+    widgets::{fit, hovered},
+    EventResponse, Hint, ManagerMessage, Screen, Screens,
 };
 
 /// Result filter shown as a tab under the search box.
@@ -124,13 +123,16 @@ impl Results {
             return;
         }
         let mut score = relevance(&self.query, title, author, rank);
-        if kind == Kind::Song {
-            score += 5;
+        match kind {
+            Kind::Song => score += 5,
+            // A playlist named like the query should not bury the songs themselves.
+            Kind::Playlist => score -= 15,
+            Kind::Video => {}
         }
         self.entries.push(Entry {
             kind,
             key,
-            label: format!(" {} {}", kind.tag(), body.trim_start()),
+            label: format!("{} {}", kind.tag(), body.trim_start()),
             status,
             score,
         });
@@ -240,9 +242,10 @@ pub struct Search {
     pub list: Arc<RwLock<ListItem<Status>>>,
     results: Arc<RwLock<Results>>,
     pub search_handle: Option<JoinHandle<()>>,
-    pub api: Option<Arc<YoutubeMusicInstance>>,
     pub action_sender: Sender<SoundAction>,
     updater: Sender<ManagerMessage>,
+    /// Keys go to the search box (true) or to the results list (false).
+    typing: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -270,99 +273,171 @@ impl ListItemAction for Status {
 impl Screen for Search {
     fn on_mouse_press(&mut self, mouse: MouseEvent, frame_data: &Rect) -> EventResponse {
         let rows = layout(*frame_data);
-        if mouse.row == rows[1].y {
-            if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
-                let x = mouse.column.saturating_sub(rows[1].x);
-                let hit = tab_at(&self.results.read().unwrap(), x);
-                if let Some(tab) = hit {
-                    self.set_tab(tab);
-                }
+        let left_down = matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left));
+        if mouse.row == rows[0].y && left_down {
+            self.typing = true;
+            return EventResponse::None;
+        }
+        if mouse.row == rows[1].y && left_down {
+            let x = mouse.column.saturating_sub(rows[1].x + 1);
+            let hit = tab_at(&self.results.read().unwrap(), x);
+            if let Some(tab) = hit {
+                self.set_tab(tab);
             }
             return EventResponse::None;
         }
-        if let Some(e) = self.list.write().unwrap().on_mouse_press(mouse, &rows[2]) {
-            return self.execute_status(e, mouse.modifiers);
+        let event = self.list.write().unwrap().on_mouse_press(mouse, &rows[2]);
+        if left_down && mouse.row > rows[2].y {
+            self.typing = false;
         }
-        EventResponse::None
+        match event {
+            Some(ListEvent::Activate(status)) => self.execute_status(status, mouse.modifiers),
+            Some(ListEvent::Menu(status)) => self.menu_for(status),
+            None => EventResponse::None,
+        }
     }
 
     fn on_key_press(&mut self, key: KeyEvent, _: &Rect) -> EventResponse {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Keys that work the same in the box and in the list.
         match key.code {
             KeyCode::Esc => return ManagerMessage::ChangeState(self.goto).event(),
             KeyCode::Tab => {
                 let next = self.current_tab().shift(1);
                 self.set_tab(next);
+                return EventResponse::None;
             }
             KeyCode::BackTab => {
                 let prev = self.current_tab().shift(-1);
                 self.set_tab(prev);
+                return EventResponse::None;
             }
-            KeyCode::Up => self.move_cursor(-1),
-            KeyCode::Down => self.move_cursor(1),
             KeyCode::PageUp => self.move_cursor(-10),
             KeyCode::PageDown => self.move_cursor(10),
+            _ => {}
+        }
+        if self.typing {
+            match key.code {
+                KeyCode::Down | KeyCode::Enter => {
+                    if self.list.read().unwrap().len() > 0 {
+                        self.typing = false;
+                    }
+                }
+                KeyCode::Backspace => {
+                    self.text.pop();
+                    self.search();
+                }
+                KeyCode::Char('u') if ctrl => {
+                    self.text.clear();
+                    self.search();
+                }
+                KeyCode::Char(c) if !ctrl => {
+                    self.text.push(c);
+                    self.search();
+                }
+                _ => {}
+            }
+            return EventResponse::None;
+        }
+        match key.code {
+            KeyCode::Up => {
+                if self.list.read().unwrap().current_position() == 0 {
+                    self.typing = true;
+                } else {
+                    self.move_cursor(-1);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => self.move_cursor(1),
+            KeyCode::Char('k') => self.move_cursor(-1),
             KeyCode::Home => self.list.write().unwrap().select_to(0),
             KeyCode::End => self.list.write().unwrap().select_to(usize::MAX),
+            KeyCode::Char('/') => self.typing = true,
+            KeyCode::Backspace => {
+                self.typing = true;
+                self.text.pop();
+                self.search();
+            }
             KeyCode::Enter => {
                 let picked = self.list.read().unwrap().select().cloned();
                 if let Some(status) = picked {
                     return self.execute_status(status, key.modifiers);
                 }
             }
-            KeyCode::Backspace => {
-                self.text.pop();
-                self.search();
-            }
-            KeyCode::Char('u') if ctrl => {
-                self.text.clear();
-                self.search();
-            }
-            KeyCode::Char(c) if !ctrl => {
-                self.text.push(c);
-                self.search();
+            KeyCode::Char('m') => {
+                let picked = self.list.read().unwrap().select().cloned();
+                if let Some(status) = picked {
+                    return self.menu_for(status);
+                }
             }
             _ => {}
         }
         EventResponse::None
     }
 
+    fn wants_text(&self) -> bool {
+        self.typing
+    }
+
+    fn hints(&self) -> Vec<Hint> {
+        if self.typing {
+            vec![
+                Hint::new("↓", "results", KeyCode::Down),
+                Hint::new("Tab", "filter", KeyCode::Tab),
+            ]
+        } else {
+            vec![
+                Hint::new("Enter", "play", KeyCode::Enter),
+                Hint::new("m", "menu", KeyCode::Char('m')),
+                Hint::new("/", "type", KeyCode::Char('/')),
+                Hint::new("Tab", "filter", KeyCode::Tab),
+            ]
+        }
+    }
+
     fn render(&mut self, frame: &mut Frame, area: Rect) {
         let rows = layout(area);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("  Search: ", Style::default().fg(ACCENT)),
-                Span::styled(self.text.clone(), Style::default().fg(TEXT)),
-                Span::styled("|", Style::default().fg(ACCENT)),
-            ])),
-            rows[0],
-        );
+        let buf = frame.buffer_mut();
+        let base = Style::default().bg(THEME.bg);
+        let box_style = if self.typing {
+            base.fg(THEME.text).bg(THEME.hover)
+        } else {
+            base.fg(THEME.text_dim)
+        };
+        let width = rows[0].width as usize;
+        let shown = if self.text.is_empty() && !self.typing {
+            "Click here or press / to search".to_owned()
+        } else {
+            format!("{}{}", self.text, if self.typing { "▏" } else { "" })
+        };
+        buf.set_string(rows[0].x, rows[0].y, " ⌕ ", base.fg(THEME.accent).bg(box_style.bg.unwrap_or(THEME.bg)));
+        buf.set_string(rows[0].x + 3, rows[0].y, fit(&shown, width.saturating_sub(3)), box_style);
 
         let results = self.results.read().unwrap();
-        let mut spans = vec![Span::raw(" ")];
-        for (i, (tab, label)) in tab_labels(&results).into_iter().enumerate() {
-            if i > 0 {
-                spans.push(Span::raw("  "));
-            }
+        let mut x = rows[1].x + 1;
+        for (tab, label) in tab_labels(&results) {
+            let w = label.chars().count() as u16;
+            let rect = Rect { x, y: rows[1].y, width: w, height: 1 };
             let style = if tab == results.tab {
-                Style::default()
-                    .fg(TEXT)
-                    .bg(ACCENT_BG)
-                    .add_modifier(Modifier::BOLD)
+                base.fg(THEME.text).bg(THEME.accent_bg).add_modifier(Modifier::BOLD)
+            } else if hovered(rect, rect.y) {
+                base.fg(THEME.text).bg(THEME.hover)
             } else {
-                Style::default().fg(TEXT_DIM)
+                base.fg(THEME.text_dim)
             };
-            spans.push(Span::styled(label, style));
+            buf.set_stringn(x, rows[1].y, &label, (rows[1].x + rows[1].width).saturating_sub(x) as usize, style);
+            x += w + 2;
         }
-        spans.push(Span::styled(
-            "   Tab / click to switch",
-            Style::default().fg(TEXT_DIM),
-        ));
-        frame.render_widget(Paragraph::new(Line::from(spans)), rows[1]);
         drop(results);
 
-        let items = self.list.read().unwrap();
-        frame.render_widget(&*items, rows[2]);
+        let mut items = self.list.write().unwrap();
+        items.placeholder = if self.text.trim().is_empty() {
+            "Type to search songs, videos and playlists".to_owned()
+        } else if self.search_handle.as_ref().map(|h| !h.is_finished()).unwrap_or(false) {
+            "Searching…".to_owned()
+        } else {
+            "No results".to_owned()
+        };
+        items.render(rows[2], frame.buffer_mut());
     }
 
     fn handle_global_message(&mut self, _: super::ManagerMessage) -> EventResponse {
@@ -374,6 +449,7 @@ impl Screen for Search {
     }
 
     fn open(&mut self) -> EventResponse {
+        self.typing = true;
         EventResponse::None
     }
 }
@@ -386,9 +462,19 @@ impl Search {
             results: Arc::new(RwLock::new(Results::default())),
             goto: Screens::MusicPlayer,
             search_handle: None,
-            api: crate::api_instance().await,
             action_sender,
             updater,
+            typing: true,
+        }
+    }
+
+    /// Context menu for a result: tracks get one, playlists open instead.
+    fn menu_for(&self, status: Status) -> EventResponse {
+        match status {
+            Status::Local(video) | Status::Unknown(video) => {
+                ManagerMessage::OpenMenu(MenuTarget::Video(video, None)).event()
+            }
+            playlist => self.execute_status(playlist, KeyModifiers::NONE),
         }
     }
 
@@ -441,15 +527,16 @@ impl Search {
         }
         refresh(&self.results, &self.list, true);
 
-        let Some(api) = self.api.clone() else {
-            return;
-        };
         if query.is_empty() {
             return;
         }
         let results = self.results.clone();
         let list = self.list.clone();
         self.search_handle = Some(run_service(async move {
+            // The shared session: signed in when there is one, so results match the account.
+            let Some(api) = crate::api_instance().await else {
+                return;
+            };
             // Wait a little so fast typing does not hit the API for every key.
             tokio::time::sleep(Duration::from_millis(300)).await;
             let escaped = query.replace('\\', "\\\\").replace('"', "\\\"");
@@ -523,7 +610,7 @@ impl Search {
                         Kind::Playlist,
                         Status::PlayList(playlist.clone(), Vec::new()),
                         format!(
-                            "{}  ·  {}",
+                            "{}\t{}",
                             to_bidi_string(&playlist.name),
                             to_bidi_string(&playlist.subtitle)
                         ),
@@ -545,16 +632,22 @@ impl Search {
                 EventResponse::None
             }
             Status::PlayList(playlist, _) => {
-                let Some(api) = self.api.clone() else {
-                    return EventResponse::None;
-                };
                 let updater = self.updater.clone();
+                let _ = updater.send(ManagerMessage::Toast("Opening playlist…".to_owned()));
                 run_service(async move {
+                    let Some(api) = crate::api_instance().await else {
+                        return;
+                    };
                     match api.get_playlist(&playlist, 10).await {
                         Ok(videos) => {
                             let _ = updater.send(
-                                ManagerMessage::Inspect(playlist.name, Screens::Search, videos)
-                                    .pass_to(Screens::PlaylistViewer),
+                                ManagerMessage::Inspect(
+                                    playlist.name,
+                                    Screens::Search,
+                                    videos,
+                                    String::new(),
+                                )
+                                .pass_to(Screens::PlaylistViewer),
                             );
                         }
                         Err(e) => error!("{e:?}"),

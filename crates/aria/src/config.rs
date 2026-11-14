@@ -43,6 +43,9 @@ pub struct MusicPlayerConfig {
     /// Whether to shuffle playlists before playing
     #[serde(default)]
     pub shuffle: bool,
+    /// Color theme: "red" (default), "mono" or "light".
+    #[serde(default = "default_theme")]
+    pub theme: String,
     #[serde(default = "default_paused_style", with = "StyleDef")]
     pub gauge_paused_style: Style,
     #[serde(default = "default_playing_style", with = "StyleDef")]
@@ -88,6 +91,7 @@ impl Default for MusicPlayerConfig {
             dbus: default_true(),
             initial_volume: default_volume(),
             shuffle: Default::default(),
+            theme: default_theme(),
             gauge_paused_style: default_paused_style(),
             gauge_playing_style: default_playing_style(),
             gauge_nomusic_style: default_nomusic_style(),
@@ -109,6 +113,10 @@ fn default_searching_style() -> Style {
 
 fn default_error_style() -> Style {
     Style::default().fg(Color::Red)
+}
+
+fn default_theme() -> String {
+    "red".to_owned()
 }
 
 fn parallel_downloads() -> u16 {

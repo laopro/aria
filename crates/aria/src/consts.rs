@@ -30,24 +30,20 @@ Options:
         --clear-cache       Erase all the files in cache
         --update            Update Aria to the latest release (Windows/Linux)
 
-Shortcuts:
-        Use your mouse to click in lists if your terminal has mouse support
+Shortcuts (press ? inside Aria for the full list):
         Space                     play/pause
-        Enter                     select a playlist or a track
-        F1 / F2 / F3 / F4         Home / Search / Now playing / Playlist
-        f                         search
-        Tab / Shift+Tab           switch search tabs (All, Songs, Videos, Playlists)
-        Up / Down, PgUp / PgDn    move in lists, Enter to play
-        s                         shuffle
-        r                         remove a track from the queue
-        Arrow Right or >          skip 5 seconds
-        Arrow Left or <           go back 5 seconds
-        CTRL + Arrow Right (>)    go to the next song
-        CTRL + Arrow Left  (<)    go to the previous song
-        +                         volume up
-        -                         volume down
-        Arrow down                scroll down
-        Arrow up                  scroll up
-        ESC                       exit the current menu
-        CTRL + C or CTRL + D      quit
+        Left / Right              seek 5 seconds
+        Ctrl + Left / Right       previous / next track
+        - / +                     volume
+        s / r                     shuffle the queue / repeat off, all, one
+        F1 F2 F3 F4               Home / Search / Now playing / Playlist
+        F6 / F7 / F8              right panel / lyrics / sign in
+        Enter, double click       play or open
+        m, right click            menu: play next, add to queue, copy link...
+        Del                       remove from the queue (Now playing)
+        n / Del / F5 (Home)       create / delete a playlist / sync with the account
+        Tab / Shift+Tab           search filters (All, Songs, Videos, Playlists)
+        /                         back to the search box
+        Esc                       back
+        Ctrl + C                  quit
 "#;
