@@ -13,10 +13,16 @@ use super::{
 
 pub trait ListItemAction {
     fn render_style(&self, string: &str, selected: bool) -> Style;
+    /// True for the row of the track that is playing.
+    fn is_playing(&self) -> bool {
+        false
+    }
 }
 
 /// What a click on the list asks for.
 pub enum ListEvent<Action> {
+    /// Single click: the row is now selected.
+    Select(Action),
     /// Double click: play or open.
     Activate(Action),
     /// Right click: context menu.
@@ -75,7 +81,9 @@ impl<Action: Clone> ListItem<Action> {
             ListMouse::None => None,
             ListMouse::Select(index) => {
                 self.current_position = index;
-                None
+                self.list
+                    .get(index)
+                    .map(|(_, action)| ListEvent::Select(action.clone()))
             }
             ListMouse::Activate(index) => {
                 self.current_position = index;
@@ -214,10 +222,20 @@ impl<Action: ListItemAction + Clone> ListItem<Action> {
                     .fg(THEME.text)
                     .bg(THEME.accent_bg)
                     .add_modifier(Modifier::BOLD)
-            } else if hovered(rows, y) {
-                action.render_style(label, false).bg(THEME.hover)
             } else {
-                action.render_style(label, false)
+                let style = if action.is_playing() {
+                    Style::default()
+                        .fg(THEME.accent)
+                        .bg(THEME.bg)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    action.render_style(label, false)
+                };
+                if hovered(rows, y) {
+                    style.bg(THEME.hover)
+                } else {
+                    style
+                }
             };
             buf.set_string(rows.x, y, format!(" {}", columns(label, width.saturating_sub(1))), style);
             drawn += 1;

@@ -2,87 +2,69 @@
 
 A lightweight YouTube Music client for the terminal, written in Rust.
 
-Aria is a TUI that streams YouTube Music straight from memory: no browser, no
-Electron, no account required. Search and play public music right away; sign in
-only if you want your own library and playlists.
+Aria streams YouTube Music straight into memory: no browser, no Electron, and
+no account needed to start. Search and play right away; sign in when you want
+your library, likes and playlists, and every change you make in Aria goes back
+to your YouTube Music account.
 
 ![Aria](docs/screenshot.png)
 
 ## Features
 
-- **Works without a Google account.** Anonymous search, playback and playlist
-  import out of the box.
-- **Optional sign-in** from inside the app (`F8` or the sidebar button): it
-  reuses the YouTube Music session of your browser and loads your library,
-  playlists, Liked Music and history.
-- **Two-way account sync:** like tracks, add them to or remove them from your
-  playlists, create and delete playlists; changes go to YouTube Music right away.
-  Playlists refresh when you open them, and `F5` on Home reloads the whole
-  library. An expired session is read again from the browser by itself.
-- **Picks up where you left:** the open playlist, the queue, the track and its
-  position, the volume, repeat and the panel come back on the next start.
-- **Search tabs:** All (best matches first), Songs, Videos and Playlists.
-- **Right panel** with the queue and the lyrics (`F6`, `F7`), remembered between runs
-  together with the volume and the current track.
-- **Album cover** in the player and, larger, in the right panel (24-bit color
-  terminals); only covers of played tracks are saved, at 3 KB each.
-- **Mouse everywhere:** double click plays, right click opens a menu (play next,
-  add to queue, copy link...), the wheel scrolls, scrollbars and the progress bar drag.
-- **Themes:** set `theme = "red"`, `"mono"` or `"light"` in `config.toml`.
-- Press `?` inside Aria for every key and mouse action.
-- **Mouse-first UI:** click the sidebar, lists, player buttons, progress bar and
-  volume bar. Drag the progress line to seek.
-- **Import any playlist** by pasting a YouTube Music link in the Home screen.
-- **Autoplay radio:** when the queue reaches its last track, similar songs are
-  fetched and appended automatically, so the music never stops.
-- **Streams into RAM** (`yt-dlp` resolves the URL, audio is decoded in memory),
-  so nothing is written to disk while listening.
-- **Small footprint:** a single native binary, ~20-40 MB of RAM while playing.
-- **Cross-platform:** Windows, Linux and macOS.
-
-## Requirements
-
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) in `PATH` (default downloader).
-- A terminal with mouse support (Windows Terminal, conhost, GNOME Terminal,
-  iTerm2, kitty, alacritty...).
-- To build: Rust 1.75+ and a C toolchain.
-  - Linux: `libasound2-dev`, `libdbus-1-dev`, `pkg-config` (Debian/Ubuntu), or
-    `alsa-lib-devel`, `dbus-devel`, `pkgconf-pkg-config` (Fedora).
-  - macOS: Xcode command line tools.
-  - Windows: MSVC build tools (WebView2 is used for the optional login window).
+- **Works without a Google account.** Search, play, queue and import public
+  playlists as a guest.
+- **Sign in from inside the app** (`F8` or the sidebar button). Aria reuses the
+  YouTube Music session of your browser and loads your library, playlists,
+  Liked Music and history. When the session expires it reads it again by itself.
+- **Two-way account sync.** Like tracks, add them to or remove them from your
+  playlists, create and delete playlists: the change reaches YouTube Music at
+  once. Playlists refresh when you open them, and `F5` on Home reloads the
+  whole library, so edits made on the phone or in the browser show up too.
+- **Picks up where you left off.** The open playlist, the queue, the track and
+  its position, the volume, repeat and the side panel come back on the next start.
+- **Search** with All (best matches first), Songs, Videos and Playlists tabs.
+- **Right panel** with a large album cover, the queue and the lyrics.
+- **Album covers** in 24-bit color terminals; only covers of played tracks are
+  saved, at 3 KB each.
+- **Mouse and keyboard alike.** Double click plays, right click opens a menu
+  (play next, add to queue, like, add to playlist, copy link...), the wheel
+  scrolls, scrollbars and the progress bar can be dragged, and every hint in the
+  bottom bar is a button. Everything also has a key; press `?` to see them all.
+- **Autoplay radio:** when the queue runs out, similar songs are added.
+- **Streams into RAM** (`yt-dlp` resolves the stream, the audio is decoded in
+  memory), so nothing is written to disk while listening.
+- **Small footprint:** a single native binary using about 20 MB of RAM with a
+  large library loaded, idle or playing.
+- **Themes:** `red` (default), `mono` and `light`.
 
 ## Install
 
-**Linux** (x86_64): one command, no Rust required. It installs Aria to
-`~/.local/bin`, adds it to your PATH and fetches `yt-dlp` if you do not have it:
+**Linux (x86_64)**, no Rust required. This installs Aria to `~/.local/bin`, adds
+it to your PATH and fetches `yt-dlp` if you do not have it:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/laopro/aria/main/install.sh | sh
 ```
 
-Then open a new terminal and run `aria`.
+Open a new terminal and run `aria`. An AppImage and a `.tar.gz` are also on the
+[releases](https://github.com/laopro/aria/releases) page.
 
-**Windows and macOS**: build from source for now (see below).
+**Windows and macOS:** build from source for now.
 
-Other options:
+### Build from source
 
-- Download the prebuilt binary from
-  [releases](https://github.com/laopro/aria/releases): `aria-linux-x86_64.AppImage`,
-  `aria-linux-x86_64.tar.gz`, `aria-windows-x86_64.exe` or the portable Windows zip.
-- macOS: build from source (below).
-- From source on any platform:
+Requirements: Rust 1.75+, a C toolchain and [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+in `PATH`.
+
+- Linux: `libasound2-dev`, `libdbus-1-dev`, `pkg-config` (Debian/Ubuntu), or
+  `alsa-lib-devel`, `dbus-devel`, `pkgconf-pkg-config` (Fedora).
+- macOS: Xcode command line tools.
+- Windows: MSVC build tools.
 
 ```bash
 cargo install --path crates/aria --locked
+# or: cargo build --release   ->  target/release/aria
 ```
-
-or build a release binary:
-
-```bash
-cargo build --release
-# target/release/aria (aria.exe on Windows)
-```
-
 
 ## Update
 
@@ -92,7 +74,6 @@ aria update
 
 Downloads the latest release, checks it arrived whole, replaces the installed
 binary (or the AppImage) and updates the `yt-dlp` that the installer put next to it.
-
 On Aria 0.3.0 and older, type `aria --update` (with dashes) once.
 
 ## Usage
@@ -101,53 +82,56 @@ On Aria 0.3.0 and older, type `aria --update` (with dashes) once.
 aria
 ```
 
-On first run there is no session: Aria starts in **guest mode**. You can search,
-play, queue tracks and import playlists. To sync your library:
-
-```bash
-aria --login            # Windows: opens a WebView2 window; other OSes: browser + cookie import
-aria --login chrome     # pick a browser explicitly
-```
-
-Other flags:
+Aria starts in guest mode. Press `F8` (or click **Sign in** in the sidebar) to
+use your account: it picks up the YouTube Music session of your browser, or
+opens the sign-in page and waits for you.
 
 | Flag | Description |
 | --- | --- |
-| `-h`, `--help` | Show usage and shortcuts |
-| `--login [browser]` | Save a YouTube Music session |
-| `--files` | Print config/cache/log paths |
+| `-h`, `--help` | Usage and shortcuts |
+| `update`, `--update` | Update Aria (and its yt-dlp) |
+| `--login [browser]` | Save a session from a terminal, e.g. `aria --login firefox` |
+| `--files` | Print the config, cache and log paths |
 | `--fix-db` | Repair the local database |
 | `--clear-cache` | Delete cached files |
 
-## Keyboard shortcuts
+## Keys
 
 | Key | Action |
 | --- | --- |
 | `Space` | Play / pause |
-| `Enter` | Open the selected playlist or play the selected track |
-| `f` | Search |
-| `s` | Shuffle the queue |
-| `r` | Remove the selected track from the queue |
 | `←` / `→` | Seek 5 seconds |
 | `Ctrl+←` / `Ctrl+→` | Previous / next track |
-| `+` / `-` | Volume up / down |
+| `-` / `+` | Volume |
+| `s` / `r` | Shuffle the queue / repeat off, all, one |
+| `F1` `F2` `F3` `F4` | Home, Search, Now playing, Playlist |
+| `F6` / `F7` / `F8` | Right panel / lyrics / sign in |
+| `Enter` | Play the track or open the playlist |
+| `m` | Menu of the selected track (like, add to playlist, play next...) |
+| `Del` | Remove from the queue (Now playing) · delete a playlist (Home, press twice) |
+| `n` / `F5` | New playlist / sync with the account (Home) |
+| `Tab` / `Shift+Tab` | Search filters |
+| `/` | Back to the search box |
 | `Esc` | Back |
-| `Ctrl+C` / `Ctrl+D` | Quit |
+| `?` | Every key and mouse action |
+| `Ctrl+C` | Quit |
 
-Everything also works with the mouse: the player bar has previous, play/pause
-and next buttons, a clickable progress line and a clickable volume bar.
+With the mouse: one click selects (and opens a playlist), a double click plays,
+a right click opens the menu. The wheel scrolls lists, changes the volume over
+the player and seeks over the progress line.
 
 ## Configuration
 
-Aria stores its files in the standard per-user directories:
+`config.toml` lives in the standard per-user directory (`~/.config/aria/` on
+Linux); run `aria --files` for the exact paths. For example:
 
-- Windows: `%APPDATA%\laopro\aria\config\config.toml`
-- Linux: `~/.config/aria/config.toml`
-- macOS: `~/Library/Application Support/com.laopro.aria/config.toml`
+```toml
+[player]
+theme = "mono"        # "red" (default), "mono" or "light"
+initial_volume = 50
+```
 
-Run `aria --files` to print the exact paths.
-
-A manual session can be provided with a `headers.txt` file:
+A session can also be given by hand in `headers.txt` next to it:
 
 ```
 Cookie: <cookie header from music.youtube.com>
@@ -157,12 +141,11 @@ User-Agent: <your user agent>
 ## How it works
 
 - `crates/ytpapi2` talks to the YouTube Music InnerTube API (search, playlists,
-  library) with or without cookies.
+  library, lyrics and account edits), with or without a session.
 - `crates/player` decodes audio with `rodio` from an in-memory buffer.
-- `crates/aria` is the TUI (`ratatui` + `crossterm`) and the player state
-  machine.
-- `yt-dlp -g` resolves the stream URL; the audio bytes are fetched with `ureq`
-  and never touch the disk.
+- `crates/download-manager` resolves streams with `yt-dlp` and downloads them
+  in ranged chunks, which YouTube does not throttle.
+- `crates/aria` is the interface (`ratatui` + `crossterm`) and the player state.
 
 ## License
 

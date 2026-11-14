@@ -160,6 +160,9 @@ pub enum Screens {
 }
 
 const SIDEBAR_WIDTH: u16 = 24;
+/// Below this size the layout does not fit and a notice is shown instead.
+const MIN_WIDTH: u16 = 40;
+const MIN_HEIGHT: u16 = 12;
 /// Below this terminal width the sidebar hides and the top bar shows the sections.
 const NARROW_WIDTH: u16 = 80;
 const TOP_BAR_HEIGHT: u16 = 1;
@@ -305,6 +308,12 @@ enum Zone {
 }
 
 #[derive(Clone, Copy, PartialEq)]
+enum BarControl {
+    Progress,
+    Volume,
+}
+
+#[derive(Clone, Copy, PartialEq)]
 enum PlayerButton {
     Previous,
     PlayPause,
@@ -330,7 +339,9 @@ const BUTTONS: [(PlayerButton, u16); 5] = [
     (PlayerButton::Shuffle, 11),
     (PlayerButton::Repeat, 15),
 ];
-const VOLUME_WIDTH: u16 = 14;
+const VOLUME_WIDTH: u16 = 15;
+/// Cells of the volume gauge, after the "vol " label.
+const VOLUME_CELLS: u16 = 7;
 
 fn player_layout(bar: Rect) -> PlayerLayout {
     let row = |n: u16| bar.y + n;
@@ -535,6 +546,10 @@ pub struct Manager {
     cover: Option<(String, Option<Vec<u8>>, Instant)>,
     /// Zone where the left button went down; drags go there until it is released.
     drag: Option<Zone>,
+    /// The player control held with the mouse: a drag only ever moves that one.
+    bar_drag: Option<BarControl>,
+    /// Where the progress knob is being dragged to; the seek happens on release.
+    seek_preview: Option<f64>,
     /// Whether the last input came from the mouse (menus open at the pointer).
     mouse_input: bool,
     shell: Shell,
@@ -586,6 +601,8 @@ impl Manager {
             toast: None,
             cover: None,
             drag: None,
+            bar_drag: None,
+            seek_preview: None,
             mouse_input: false,
             shell: Shell::default(),
             menu_position: (0, 0),
@@ -1056,37 +1073,72 @@ impl Manager {
         let (x, y) = (mouse.column, mouse.row);
         let inside = |rect: &Rect| rect_contains(rect, x, y, 0);
         let left_down = matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left));
-        let left_drag = matches!(mouse.kind, MouseEventKind::Drag(MouseButton::Left));
-        let player = &mut self.music_player;
-
-        match mouse.kind {
-            MouseEventKind::ScrollUp => player.sink.volume_up(),
-            MouseEventKind::ScrollDown => player.sink.volume_down(),
-            _ => {}
-        }
-
-        // Dragging keeps seeking or changing the volume even off the line.
         let progress = layout.progress;
-        if (left_down && inside(&progress)) || (left_drag && y.abs_diff(progress.y) <= 1 && !inside(&layout.volume)) {
-            let ratio = (x.saturating_sub(progress.x) as f64 / progress.width.max(1) as f64)
-                .clamp(0.0, 1.0);
-            if let Some(total) = player.total_seconds() {
-                player
-                    .sink
-                    .seek_to(Duration::from_secs_f64(total as f64 * ratio));
-            }
-            return false;
-        }
         let volume = layout.volume;
-        if (left_down || left_drag) && inside(&volume) {
-            let bar_x = volume.x + 4;
-            let ratio = (x.saturating_sub(bar_x) as f64 / 7.0).clamp(0.0, 1.0);
-            player.sink.set_volume((ratio * 100.0).round() as i32);
-            return false;
+        let progress_ratio = |x: u16| {
+            (x.saturating_sub(progress.x) as f64 / progress.width.saturating_sub(1).max(1) as f64)
+                .clamp(0.0, 1.0)
+        };
+        let volume_ratio = |x: u16| {
+            let gauge = volume.x + 4;
+            (x.saturating_sub(gauge) as f64 / (VOLUME_CELLS - 1) as f64).clamp(0.0, 1.0)
+        };
+
+        // The wheel seeks over the progress line and changes the volume elsewhere.
+        match mouse.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
+                let action = match (y == progress.y, up) {
+                    (true, true) => SoundAction::Forward,
+                    (true, false) => SoundAction::Backward,
+                    (false, true) => SoundAction::Plus,
+                    (false, false) => SoundAction::Minus,
+                };
+                action.apply_sound_action(&mut self.music_player);
+                return false;
+            }
+            // A drag moves only the control it started on, wherever the pointer goes.
+            MouseEventKind::Drag(MouseButton::Left) => {
+                match self.bar_drag {
+                    Some(BarControl::Progress) => self.seek_preview = Some(progress_ratio(x)),
+                    Some(BarControl::Volume) => self
+                        .music_player
+                        .sink
+                        .set_volume((volume_ratio(x) * 100.0).round() as i32),
+                    None => {}
+                }
+                return false;
+            }
+            MouseEventKind::Up(_) => {
+                if let Some(ratio) = self.seek_preview.take() {
+                    if let Some(total) = self.music_player.total_seconds() {
+                        self.music_player
+                            .sink
+                            .seek_to(Duration::from_secs_f64(total as f64 * ratio));
+                    }
+                }
+                self.bar_drag = None;
+                return false;
+            }
+            _ => {}
         }
         if !left_down {
             return false;
         }
+        if inside(&progress) {
+            // Seek when the button is released, so dragging does not stutter.
+            self.bar_drag = Some(BarControl::Progress);
+            self.seek_preview = Some(progress_ratio(x));
+            return false;
+        }
+        if inside(&volume) {
+            self.bar_drag = Some(BarControl::Volume);
+            self.music_player
+                .sink
+                .set_volume((volume_ratio(x) * 100.0).round() as i32);
+            return false;
+        }
+        let player = &mut self.music_player;
         if let Some((_, button)) = layout.buttons.iter().find(|(rect, _)| inside(rect)) {
             match button {
                 PlayerButton::Previous => SoundAction::Previous(1).apply_sound_action(player),
@@ -1169,6 +1221,12 @@ impl Manager {
 
     /// Loads the cover and the lyrics of the playing track when it changes.
     fn follow_current_track(&mut self) {
+        widgets::set_now_playing(
+            self.music_player
+                .current()
+                .map(|v| v.video_id.as_str())
+                .unwrap_or(""),
+        );
         let Some(id) = self.music_player.current().map(|v| v.video_id.clone()) else {
             self.cover = None;
             return;
@@ -1200,7 +1258,28 @@ impl Manager {
 
     /// Draws the global shell (top bar, sidebar, panel, player) plus the screen.
     pub fn draw(&mut self, f: &mut Frame) {
-        self.shell = Shell::new(f.size(), self.panel_open);
+        let size = f.size();
+        if size.width < MIN_WIDTH || size.height < MIN_HEIGHT {
+            // Too small for the layout: say so instead of drawing out of bounds.
+            self.shell = Shell::default();
+            self.menu = None;
+            self.help_open = false;
+            f.render_widget(Block::default().style(Style::default().bg(THEME.bg)), size);
+            let lines = ["Aria", "Make the", "window bigger"];
+            for (i, line) in lines.iter().enumerate() {
+                if (i as u16) < size.height {
+                    f.buffer_mut().set_stringn(
+                        size.x,
+                        size.y + i as u16,
+                        line,
+                        size.width as usize,
+                        Style::default().fg(THEME.text_dim).bg(THEME.bg),
+                    );
+                }
+            }
+            return;
+        }
+        self.shell = Shell::new(size, self.panel_open);
         let shell = self.shell;
         self.follow_current_track();
         if let Some((_, at)) = &self.toast {
@@ -1402,10 +1481,15 @@ impl Manager {
         let time = now
             .as_ref()
             .map(|n| {
+                // While the knob is dragged, show where the release will land.
+                let elapsed = self
+                    .seek_preview
+                    .map(|ratio| (ratio * n.total as f64) as u64)
+                    .unwrap_or(n.elapsed);
                 format!(
                     "{}:{:02} / {}:{:02}",
-                    n.elapsed / 60,
-                    n.elapsed % 60,
+                    elapsed / 60,
+                    elapsed % 60,
                     n.total / 60,
                     n.total % 60
                 )
@@ -1476,10 +1560,10 @@ impl Manager {
             volume_rect.x,
             volume_rect.y,
             format!(
-                "vol {}{} {:>2}",
+                "vol {}{} {:>3}",
                 "█".repeat(filled),
                 "░".repeat(7 - filled),
-                volume.min(99)
+                volume
             ),
             base.fg(if hovered(volume_rect, volume_rect.y) {
                 THEME.text
@@ -1490,10 +1574,14 @@ impl Manager {
 
         // Progress line with a knob.
         let progress = layout.progress;
-        let ratio = now.as_ref().map(|n| n.ratio).unwrap_or(0.0).clamp(0.0, 1.0);
+        let ratio = self
+            .seek_preview
+            .or(now.as_ref().map(|n| n.ratio))
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
         let width = progress.width as usize;
         if width > 1 {
-            let filled = ((ratio * width as f64).round() as usize).min(width - 1);
+            let filled = ((ratio * (width - 1) as f64).round() as usize).min(width - 1);
             buf.set_string(progress.x, progress.y, "━".repeat(filled), base.fg(THEME.accent));
             buf.set_string(
                 progress.x + filled as u16,

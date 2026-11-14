@@ -8,10 +8,8 @@ use ratatui::{
 use ytpapi2::YoutubeMusicVideoRef;
 
 use crate::{
-    consts::CONFIG,
     structures::sound_action::SoundAction,
-    utils::{invert, to_bidi_string},
-    DATABASE,
+    utils::to_bidi_string,
 };
 
 use super::{
@@ -25,21 +23,15 @@ use super::{
 };
 
 #[derive(Clone)]
-pub struct PlayListAction(usize, bool);
+pub struct PlayListAction(usize, String);
 
 impl ListItemAction for PlayListAction {
-    fn render_style(&self, _: &str, selected: bool) -> Style {
-        if selected {
-            if self.1 {
-                invert(CONFIG.player.text_downloading_style)
-            } else {
-                invert(CONFIG.player.text_next_style)
-            }
-        } else if self.1 {
-            CONFIG.player.text_downloading_style
-        } else {
-            CONFIG.player.text_next_style
-        }
+    fn render_style(&self, _: &str, _selected: bool) -> Style {
+        Style::default().fg(THEME.text).bg(THEME.bg)
+    }
+
+    fn is_playing(&self) -> bool {
+        super::widgets::is_now_playing(&self.1)
     }
 }
 
@@ -99,17 +91,11 @@ impl PlaylistView {
 
     /// Rebuilds the rows from `videos`, keeping the selection where it was.
     fn rebuild(&mut self, selected: usize) {
-        let local: std::collections::HashSet<String> = DATABASE
-            .read()
-            .unwrap()
-            .iter()
-            .map(|x| x.video_id.clone())
-            .collect();
         self.items.update(
             self.videos
                 .iter()
                 .enumerate()
-                .map(|(i, m)| (format_track(m), PlayListAction(i, !local.contains(&m.video_id))))
+                .map(|(i, m)| (format_track(m), PlayListAction(i, m.video_id.clone())))
                 .collect(),
             selected,
         );
@@ -176,6 +162,7 @@ impl Screen for PlaylistView {
                 EventResponse::None
             }
             Some(ListEvent::Menu(PlayListAction(v, _))) => self.menu_for(v),
+            Some(ListEvent::Select(_)) => EventResponse::None,
             None => EventResponse::None,
         }
     }

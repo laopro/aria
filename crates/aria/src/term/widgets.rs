@@ -12,6 +12,19 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::theme::THEME;
 
+/// Video id of the track that is playing, so every list can mark it.
+static NOW_PLAYING: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+
+pub fn set_now_playing(video_id: &str) {
+    if *NOW_PLAYING.read().unwrap() != video_id {
+        *NOW_PLAYING.write().unwrap() = video_id.to_owned();
+    }
+}
+
+pub fn is_now_playing(video_id: &str) -> bool {
+    !video_id.is_empty() && *NOW_PLAYING.read().unwrap() == video_id
+}
+
 /// Mouse position, packed as `x << 16 | y`; `u32::MAX` when unknown.
 static HOVER: AtomicU32 = AtomicU32::new(u32::MAX);
 

@@ -11,9 +11,8 @@ use ytpapi2::YoutubeMusicVideoRef;
 
 use crate::{
     account::{self, LibraryChange},
-    consts::CONFIG,
     run_service,
-    utils::{invert, to_bidi_string},
+    utils::to_bidi_string,
 };
 
 use super::{
@@ -30,12 +29,8 @@ pub enum ChooserAction {
 }
 
 impl ListItemAction for ChooserAction {
-    fn render_style(&self, _: &str, selected: bool) -> Style {
-        if selected {
-            invert(CONFIG.player.text_next_style)
-        } else {
-            CONFIG.player.text_next_style
-        }
+    fn render_style(&self, _: &str, _selected: bool) -> Style {
+        Style::default().fg(THEME.text).bg(THEME.bg)
     }
 }
 
@@ -316,7 +311,9 @@ impl Screen for Chooser {
             self.input_active = false;
         }
         match self.item_list.on_mouse_press(mouse_event, &list_area) {
-            Some(ListEvent::Activate(ChooserAction::Play(a)))
+            // Opening a playlist only navigates, so one click is enough.
+            Some(ListEvent::Select(ChooserAction::Play(a)))
+            | Some(ListEvent::Activate(ChooserAction::Play(a)))
             | Some(ListEvent::Menu(ChooserAction::Play(a))) => self.inspect(a),
             None => EventResponse::None,
         }

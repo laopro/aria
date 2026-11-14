@@ -14,10 +14,9 @@ use tokio::task::JoinHandle;
 use ytpapi2::{SearchResults, YoutubeMusicPlaylistRef, YoutubeMusicVideoRef};
 
 use crate::{
-    consts::CONFIG,
     run_service,
     structures::sound_action::SoundAction,
-    utils::{invert, to_bidi_string},
+    utils::to_bidi_string,
     DATABASE,
 };
 
@@ -256,16 +255,16 @@ pub enum Status {
 }
 
 impl ListItemAction for Status {
-    fn render_style(&self, _: &str, selected: bool) -> Style {
-        let k = match self {
-            Self::Local(_) => CONFIG.player.text_next_style,
-            Self::Unknown(_) => CONFIG.player.text_downloading_style,
-            Self::PlayList(_, _) => CONFIG.player.text_next_style,
-        };
-        if selected {
-            invert(k)
-        } else {
-            k
+    fn render_style(&self, _: &str, _selected: bool) -> Style {
+        Style::default().fg(THEME.text).bg(THEME.bg)
+    }
+
+    fn is_playing(&self) -> bool {
+        match self {
+            Self::Local(video) | Self::Unknown(video) => {
+                super::widgets::is_now_playing(&video.video_id)
+            }
+            Self::PlayList(..) => false,
         }
     }
 }
@@ -293,6 +292,11 @@ impl Screen for Search {
         match event {
             Some(ListEvent::Activate(status)) => self.execute_status(status, mouse.modifiers),
             Some(ListEvent::Menu(status)) => self.menu_for(status),
+            // A playlist opens on a single click; tracks wait for a double click.
+            Some(ListEvent::Select(status @ Status::PlayList(..))) => {
+                self.execute_status(status, mouse.modifiers)
+            }
+            Some(ListEvent::Select(_)) => EventResponse::None,
             None => EventResponse::None,
         }
     }
