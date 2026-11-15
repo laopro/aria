@@ -36,7 +36,7 @@ static PREWARMING: AtomicBool = AtomicBool::new(false);
 /// `lean` skips fetches the audio URL does not need; the full run is the retry path.
 fn run_ytdlp(video_id: &str, lean: bool) -> Result<String, String> {
     let watch = format!("https://www.youtube.com/watch?v={video_id}");
-    let mut command = Command::new("yt-dlp");
+    let mut command = Command::new(crate::ytdlp());
     command.args(["--no-playlist", "-f", FORMAT, "-g", "--no-warnings"]);
     if lean {
         // (Skipping the watch page too gets the request flagged as a bot.)

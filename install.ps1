@@ -1,6 +1,7 @@
 # Aria installer for Windows.
 # Usage: irm https://raw.githubusercontent.com/laopro/aria/main/install.ps1 | iex
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"  # the progress bar makes downloads very slow
 
 $repo = "laopro/aria"
 $dest = Join-Path $env:LOCALAPPDATA "Aria"
@@ -21,8 +22,12 @@ if ($userPath -notlike "*$dest*") {
     Write-Host "Added $dest to your PATH. Open a new terminal."
 }
 
-if (-not (Get-Command yt-dlp -ErrorAction SilentlyContinue)) {
-    Write-Host "Heads up: install yt-dlp (https://github.com/yt-dlp/yt-dlp) so Aria can play music." -ForegroundColor Yellow
+# Aria plays through yt-dlp; it looks for it next to aria.exe first.
+$ytdlp = Join-Path $dest "yt-dlp.exe"
+if (-not (Test-Path $ytdlp)) {
+    Write-Host "Fetching yt-dlp (needed to play music)..."
+    Invoke-WebRequest "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile $ytdlp
+    Write-Host "Installed $ytdlp"
 }
 
 Write-Host "Done. Run: aria" -ForegroundColor Green

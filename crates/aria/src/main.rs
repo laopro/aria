@@ -293,7 +293,7 @@ fn cookies_from_ytdlp(browser: &str) -> Option<String> {
     let jar = std::env::temp_dir().join("aria-cookies.txt");
     let _ = std::fs::remove_file(&jar);
 
-    let output = std::process::Command::new("yt-dlp")
+    let output = std::process::Command::new(download_manager::ytdlp())
         .args([
             "--cookies-from-browser",
             browser,
@@ -796,6 +796,76 @@ fn update() {
     update_ytdlp();
 }
 
+fn ytdlp_works() -> bool {
+    match std::process::Command::new(download_manager::ytdlp())
+        .arg("--version")
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            info!("yt-dlp found: {}", String::from_utf8_lossy(&out.stdout).trim());
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Downloads the standalone yt-dlp (no Python needed) next to Aria. A copy that
+/// no longer runs, such as a pip install left behind by a Python upgrade, is replaced.
+fn fetch_ytdlp() -> bool {
+    let asset = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", _) => "yt-dlp.exe",
+        ("macos", _) => "yt-dlp_macos",
+        ("linux", "aarch64") => "yt-dlp_linux_aarch64",
+        ("linux", _) => "yt-dlp_linux",
+        _ => return false,
+    };
+    let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    else {
+        return false;
+    };
+    let target = dir.join(download_manager::YTDLP_FILE);
+    let tmp = dir.join(format!("{}.download", download_manager::YTDLP_FILE));
+    println!("yt-dlp is missing or broken: downloading it next to Aria...");
+    let url = format!("https://github.com/yt-dlp/yt-dlp/releases/latest/download/{asset}");
+    let result = ureq::get(&url)
+        .set("User-Agent", DEFAULT_USER_AGENT)
+        .call()
+        .map_err(|e| e.to_string())
+        .and_then(|response| {
+            let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+            std::io::copy(&mut response.into_reader(), &mut file).map_err(|e| e.to_string())
+        });
+    match result {
+        Ok(size) if size > 1_000_000 => {}
+        Ok(_) => {
+            println!("[ERROR] The yt-dlp download was incomplete.");
+            let _ = std::fs::remove_file(&tmp);
+            return false;
+        }
+        Err(e) => {
+            println!("[ERROR] Could not download yt-dlp to {}: {e}", dir.display());
+            let _ = std::fs::remove_file(&tmp);
+            return false;
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755));
+    }
+    if target.exists() {
+        let _ = std::fs::rename(&target, dir.join(format!("{}.broken", download_manager::YTDLP_FILE)));
+    }
+    if let Err(e) = std::fs::rename(&tmp, &target) {
+        println!("[ERROR] Could not install {}: {e}", target.display());
+        return false;
+    }
+    println!("Installed {}", target.display());
+    true
+}
+
 /// Updates the yt-dlp that the installer put next to Aria (a system one is left alone).
 fn update_ytdlp() {
     let Some(dir) = std::env::current_exe()
@@ -804,7 +874,7 @@ fn update_ytdlp() {
     else {
         return;
     };
-    let ytdlp = dir.join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" });
+    let ytdlp = dir.join(download_manager::YTDLP_FILE);
     if !ytdlp.exists() {
         return;
     }
@@ -821,22 +891,12 @@ async fn app_start_main(updater_r: Receiver<ManagerMessage>, updater_s: Sender<M
     std::fs::create_dir_all(CACHE_DIR.join("downloads")).unwrap();
 
     if CONFIG.global.downloader == crate::config::DownloaderConfig::Ytdlp {
-        match std::process::Command::new("yt-dlp")
-            .arg("--version")
-            .output()
-        {
-            Ok(out) if out.status.success() => {
-                info!(
-                    "yt-dlp found: {}",
-                    String::from_utf8_lossy(&out.stdout).trim()
-                );
-            }
-            _ => {
-                println!("yt-dlp not found in PATH");
-                println!("get it at https://github.com/yt-dlp/yt-dlp or set downloader = \"rusty_ytdl\" in config");
-                std::io::stdin().read_line(&mut String::new()).unwrap();
-                return;
-            }
+        if !ytdlp_works() && !(fetch_ytdlp() && ytdlp_works()) {
+            println!("Aria needs yt-dlp to play music: https://github.com/yt-dlp/yt-dlp");
+            println!("Put it next to Aria or in PATH, or set downloader = \"rusty_ytdl\" in config.");
+            println!("Press Enter to close.");
+            let _ = std::io::stdin().read_line(&mut String::new());
+            return;
         }
     }
 

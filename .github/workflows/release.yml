@@ -89,7 +89,8 @@ jobs:
           =====================
 
           1. Put aria.exe anywhere you like.
-          2. Install yt-dlp (https://github.com/yt-dlp/yt-dlp) and add it to PATH.
+          2. On the first start Aria downloads yt-dlp.exe next to itself
+             (or put it there, or in PATH, yourself).
           3. Run aria.exe from Windows Terminal.
 
           Config, cache and logs live in %APPDATA%\laopro\aria and

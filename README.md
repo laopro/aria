@@ -49,7 +49,18 @@ curl -fsSL https://raw.githubusercontent.com/laopro/aria/main/install.sh | sh
 Open a new terminal and run `aria`. An AppImage and a `.tar.gz` are also on the
 [releases](https://github.com/laopro/aria/releases) page.
 
-**Windows and macOS:** build from source for now.
+**Windows 10/11**: paste this in PowerShell. It installs Aria and `yt-dlp` to
+`%LOCALAPPDATA%\Aria` and adds it to your PATH:
+
+```powershell
+irm https://raw.githubusercontent.com/laopro/aria/main/install.ps1 | iex
+```
+
+Open a new terminal (Windows Terminal is best) and run `aria`. The `.exe` from
+the releases page also works on its own: on the first start it downloads
+`yt-dlp.exe` next to itself.
+
+**macOS:** build from source for now.
 
 ### Build from source
 

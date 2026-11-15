@@ -52,7 +52,7 @@ async fn download_with_ytdlp(
 
     let url = format!("https://www.youtube.com/watch?v={}", video_id);
 
-    let output = Command::new("yt-dlp")
+    let output = Command::new(crate::ytdlp())
         .args([
             "--no-playlist",
             "-f",

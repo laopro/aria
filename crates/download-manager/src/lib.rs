@@ -1,6 +1,19 @@
 mod stream;
 mod task;
 
+/// File name of the yt-dlp executable on this system.
+pub const YTDLP_FILE: &str = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
+
+/// The yt-dlp to run: the one next to Aria if there is one (the installers and
+/// Aria itself put it there), otherwise whatever `yt-dlp` is in PATH.
+pub fn ytdlp() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join(YTDLP_FILE)))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| YTDLP_FILE.into())
+}
+
 pub use stream::{prewarm, stream_bytes};
 
 use std::{
