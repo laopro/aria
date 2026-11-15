@@ -44,8 +44,12 @@ case ":$PATH:" in
     ;;
 esac
 
-# Aria plays through yt-dlp: fetch it too when it is missing.
-if ! command -v yt-dlp >/dev/null 2>&1 && [ ! -x "$PREFIX/yt-dlp" ]; then
+# Aria plays through yt-dlp: fetch it too when it is missing or broken (a pip
+# install stops working when the distro moves to a new Python version).
+if ! yt-dlp --version >/dev/null 2>&1 && ! "$PREFIX/yt-dlp" --version >/dev/null 2>&1; then
+    if [ -e "$PREFIX/yt-dlp" ]; then
+        mv "$PREFIX/yt-dlp" "$PREFIX/yt-dlp.broken"
+    fi
     say "Fetching yt-dlp (needed to play music)..."
     # The plain script starts faster but needs Python; the standalone build does not.
     if command -v python3 >/dev/null 2>&1; then
